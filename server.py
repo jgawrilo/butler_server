@@ -57,6 +57,7 @@ regex = re.compile(("([a-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+\/=?^_`"
 
 # Social Sites
 social_mappings = [
+    {"site":"Google","urls":["https://plus.google.com/"]},
     {"site":"LinkedIn","urls":["https://www.linkedin.com/"]},
     {"site":"Instagram","urls":["https://www.instagram.com/"],"left_split":"https://www.instagram.com/",
     "profile_class":"_79dar","image_class":"_iv4d5"},
@@ -67,6 +68,10 @@ social_mappings = [
     {"site":"YouTube","urls":["https://www.youtube.com"],"left_split":"https://twitter.com/"}
     #{"site":"F6S","urls":["https://www.f6s.com/"]}
     ]
+
+stop = [
+    "https://en.wikipedia.org"
+]
 
 def visible(element):
     if element.parent.name in ['style', 'script', '[document]', 'head', 'title']:
@@ -336,11 +341,11 @@ def build_profile(entries):
                 names_dict[n["id"]][1] += n["count"]
                 names_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
 
-    main_profile["phone_numbers"] = sorted([{"id":x,"value":phone_dict[x][0],"count":phone_dict[x][1],"from":list(map(json.loads,phone_dict[x][2]))} for x in phone_dict],key=lambda x: x["count"],reverse=True)
-    main_profile["addresses"] = sorted([{"id":x,"value":address_dict[x][0],"count":address_dict[x][1],"from":list(map(json.loads,address_dict[x][2]))} for x in address_dict],key=lambda x: x["count"],reverse=True)
-    main_profile["names"] = sorted([{"id":x,"value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict],key=lambda x: x["count"],reverse=True)[:3]
-    main_profile["emails"] = sorted([{"id":x,"value":email_dict[x][0],"count":email_dict[x][1],"from":list(map(json.loads, email_dict[x][2]))} for x in email_dict],key=lambda x: x["count"],reverse=True)
-    main_profile["relationships"] = sorted([{"id":x,"type":"connection","value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict],key=lambda x: x["count"],reverse=True)[3:]
+    main_profile["phone_numbers"] = sorted([{"id":x,"value":phone_dict[x][0],"count":phone_dict[x][1],"from":list(map(json.loads,phone_dict[x][2]))} for x in phone_dict],key=lambda x: len(x["from"]),reverse=True)
+    main_profile["addresses"] = sorted([{"id":x,"value":address_dict[x][0],"count":address_dict[x][1],"from":list(map(json.loads,address_dict[x][2]))} for x in address_dict],key=lambda x: len(x["from"]),reverse=True)
+    main_profile["names"] = sorted([{"id":x,"value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict],key=lambda x: len(x["from"]),reverse=True)[:3]
+    main_profile["emails"] = sorted([{"id":x,"value":email_dict[x][0],"count":email_dict[x][1],"from":list(map(json.loads, email_dict[x][2]))} for x in email_dict],key=lambda x: len(x["from"]),reverse=True)
+    main_profile["relationships"] = sorted([{"id":x,"type":"connection","value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict],key=lambda x: len(x["from"]),reverse=True)[3:]
     main_profile["social_media"] = sorted([{"id":x,"url":social_dict[x][0],"count":social_dict[x][1]} for x in social_dict],key=lambda x: x["count"],reverse=True)
     
     return main_profile
@@ -387,7 +392,8 @@ def handle_search():
         images = []
         social = False
 
-        if url.endswith(".pdf"):
+        if url.endswith(".pdf") or any(map(url.startswith,stop)):
+            print "Skipping..."
             continue
 
         if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
@@ -404,11 +410,11 @@ def handle_search():
                 phones = getPhoneNumbers(text)
                 #images = get_images(url)
                 #ss_text = get_screenshot_text(url,i)
-            except (UnicodeDecodeError,IOError,haul.exceptions.RetrieveError):
-                print "Error"
+            except (UnicodeDecodeError,IOError,haul.exceptions.RetrieveError,Exception):
+                print "Error..."
                 continue
             if text == None or text.strip() == "":
-                print "No Text"
+                print "No Text..."
                 continue
         texts.append(text)
 
@@ -468,7 +474,7 @@ def handle_search():
     with codecs.open("data/data.json","w",encoding="utf8",errors="ignore") as out:
         out.write(json.dumps(return_data,indent=2))
 
-    '''
+    
     fig, ax = plt.subplots(figsize=(30, 20)) # set size
 
     ax = dendrogram(linkage_matrix, orientation="right", labels=good_urls);
@@ -488,7 +494,7 @@ def handle_search():
     
 
     plt.close()
-    '''
+
     print json.dumps(return_data)
     resp = Response(json.dumps(return_data,indent=2))
     resp.headers['Access-Control-Allow-Origin'] = '*'
