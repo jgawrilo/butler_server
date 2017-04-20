@@ -19,8 +19,13 @@ import json
 from table import HTMLTableParser
 from subprocess import Popen
 from sys import stderr
+from nltk.corpus import stopwords
 
 from flask import Flask, request, Response
+from gensim import corpora
+from collections import defaultdict
+from gensim.models.hdpmodel import HdpModel
+import haul
 
 try:
     import Image
@@ -41,10 +46,14 @@ nlp = spacy.load('en')
 page_dict = {}
 entity_dict = {}
 address_dict = {}
-
-print "here"
+email_dict = {}
+phone_dict = {}
 
 app = Flask(__name__)
+
+regex = re.compile(("([a-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+\/=?^_`"
+                    "{|}~-]+)*(@|\sat\s)(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(\.|"
+                    "\sdot\s))+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)"))
 
 # Social Sites
 social_mappings = [
@@ -82,7 +91,7 @@ def process_entity_relations(entity_relations_str):
     entity_relations = list()
     for s in entity_relations_str:
         entity_relations.append(s[s.find("(") + 1:s.find(")")].split(';'))
-    return entity_relations
+    return [{"a":x[0],"rel":x[1],"b":x[2]} for x in entity_relations]
 
 def getEntities(text):
     ent_dict = {}
@@ -95,23 +104,68 @@ def getEntities(text):
     ["CARDINAL","DATE","MONEY","PERCENT","TIME","WORK_OF_ART"]]
 
 def getPhoneNumbers(text):
-    pass
+    phones = []
+    for match in re.finditer(r"\(?\b[2-9][0-9]{2}\)?[-. ]?[2-9][0-9]{2}[-. ]?[0-9]{4}\b", text):
+        match = match.group()
+        phone_dict[match] = phone_dict.get(match,"phone"+str(len(phone_dict)))
+        phones.append({"id":phone_dict[match],"value":match})
+    return phones
 
-def getEmails(text):
-    pass
+
+def get_emails(text):
+    """Returns an iterator of matched emails found in string s."""
+    # Removing lines that start with '//' because the regular expression
+    # mistakenly matches patterns like 'http://foo@bar.com' as '//foo@bar.com'.
+    ret = []
+    for email in (email[0] for email in re.findall(regex, text) if not email[0].startswith('//')):
+        email_dict[email] = email_dict.get(email,"e"+str(len(email_dict)))
+        ret.append({"id":email_dict[email],"value":email})
+    return ret
+
+def doLDA(documents,query):
+    # remove common words and tokenize
+    stoplist = set(stopwords.words('english')).union(set([x.lower() for x in query.split()]))
+    texts = [[word for word in document.lower().split() if word not in stoplist and not is_float(word)]
+             for document in documents]
+
+    # remove words that appear only once
+    frequency = defaultdict(int)
+    for text in texts:
+        for token in text:
+            frequency[token] += 1
+
+    texts = [[token for token in text if frequency[token] > 1]
+             for text in texts]
+
+    dictionary = corpora.Dictionary(texts)
+    corpus = [dictionary.doc2bow(text) for text in texts]
+    hdp = HdpModel(corpus,dictionary)
+
+    topic_answers = []
+    for x in range(len(documents)):
+        #print x, corpus[x]
+        entries = sorted(hdp[corpus[x]],key=lambda x: x[1],reverse=True)
+        if entries:
+            d = hdp.show_topics(formatted=False)[entries[0][0]]
+            ret = {"number":d[0],"scores":map(lambda x:{"value":x[0].replace("\"",""),"score":x[1]},d[1])}
+            topic_answers.append(ret)
+        else:
+            topic_answers.append(None)
+    return topic_answers
+
 
 def getAddresses(text):
     addresses = pyap.parse(text, country='US')
-    addresses = map(str,addresses)
+    addresses = map(lambda x: " ".join(str(x).upper().split()),addresses)
     for address in addresses:
         address_dict[address] = address_dict.get(address,"a"+str(len(address_dict)))
     return map(lambda x: {"id":address_dict[x],"value":x},addresses)
 
 def getRelationships(location):
-    out = "/Users/jgawrilow/j/hiearchical_clustering/data/rel_"+location
+    out = "/Users/jgawrilow/j/butler_server/data/rel_"+location
     command = 'cd /Users/jgawrilow/Desktop/stanford-corenlp-full-2016-10-31; java -mx12g -cp "*" ' \
                'edu.stanford.nlp.naturalli.OpenIE {} -resolve_coref true -triple.strict true -format ollie > {}'. \
-        format("/Users/jgawrilow/j/hiearchical_clustering/data/"+location, out)
+        format("/Users/jgawrilow/j/butler_server/data/"+location, out)
 
 
     java_process = Popen(command, stdout=stderr, stderr=open(os.devnull, 'w'), shell=True)
@@ -121,6 +175,7 @@ def getRelationships(location):
     with open(out, 'r') as output_file:
         results_str = output_file.readlines()
     results = process_entity_relations(results_str)
+    return results
 
 def get_tables(url):
     tp = HTMLTableParser()
@@ -134,6 +189,9 @@ def get_html(url):
     html = response.content.encode("utf-8","ignore")
     return html
 
+def get_images(url):
+    result = haul.find_images(url)
+    return map(lambda x: url + x if x.startswith("/") else x,result.image_urls)
 
 def get_screenshot_text(url,i):
     br = webdriver.PhantomJS()
@@ -160,11 +218,16 @@ def get_readability_text(html):
     return readable_article.strip()
 
 
-def get_urls(term,num_pages=10):
-    #return [url for url in search(term, stop=10)]
-    num_page = 1
-    search_results = google.search(term, num_page)
+def get_urls(term,num_pages=1):
+    search_results = google.search(term, num_pages)
     return [x.link for x in search_results]
+
+def is_float(s):
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return  False
 
 def build_social_json(url,ptype):
     page_dict[url] = page_dict.get(url,"p"+str(len(page_dict)))
@@ -187,7 +250,7 @@ def build_social_json(url,ptype):
         "type":ptype,
     }
 
-def build_json(url,title,entities,addresses,ptype):
+def build_json(url,title,entities,addresses,ptype,rels,emails,phones,images):
     page_dict[url] = page_dict.get(url,"p"+str(len(page_dict)))
     return {
         "url":url,
@@ -195,13 +258,13 @@ def build_json(url,title,entities,addresses,ptype):
         "title":title,
         "profile":{
             "names":[],
-            "emails":[],
-            "phone_numbers":[],
+            "emails":emails,
+            "phone_numbers":phones,
             "addresses":addresses,
-            "relationships":[],
+            "relationships":rels,
             "usernames":[],
             "other":[],
-            "images":[],
+            "images":images,
             "videos":[]
         },
         "entities":entities,
@@ -230,12 +293,69 @@ def add_node(node, parent, urls ):
     if node.left: add_node( node.left, newNode, urls )
     if node.right: add_node( node.right, newNode, urls )
 
+def build_profile(entries):
+    main_profile = {
+            "names":[],
+            "emails":[],
+            "phone_numbers":[],
+            "addresses":[],
+            "relationships":[],
+            "usernames":[],
+            "other":[],
+            "images":[],
+            "videos":[],
+            "social_media":[]
+        }
+    phone_dict = {}
+    address_dict = {}
+    names_dict = {}
+    email_dict = {}
+    social_dict = {}
+
+    for e in entries:
+        if e["type"] == "social":
+            social_dict[e["id"]] = social_dict.get(e["id"],[e["url"],0])
+            social_dict[e["id"]][1] += 1
+            continue
+
+        for n in e["profile"]["phone_numbers"]:
+            phone_dict[n["id"]] = phone_dict.get(n["id"],[n["value"],0,set()])
+            phone_dict[n["id"]][1] += 1
+            phone_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
+        for n in e["profile"]["emails"]:
+            email_dict[n["id"]] = email_dict.get(n["id"],[n["value"],0,set()])
+            email_dict[n["id"]][1] += 1
+            email_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
+        for n in e["profile"]["addresses"]:
+            address_dict[n["id"]] = address_dict.get(n["id"],[n["value"],0,set()])
+            address_dict[n["id"]][1] += 1
+            address_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
+        for n in e["entities"]:
+            if n["type"] == "PERSON":
+                names_dict[n["id"]] = names_dict.get(n["id"],[n["value"],0,set()])
+                names_dict[n["id"]][1] += n["count"]
+                names_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
+
+    main_profile["phone_numbers"] = sorted([{"id":x,"value":phone_dict[x][0],"count":phone_dict[x][1],"from":list(map(json.loads,phone_dict[x][2]))} for x in phone_dict],key=lambda x: x["count"],reverse=True)
+    main_profile["addresses"] = sorted([{"id":x,"value":address_dict[x][0],"count":address_dict[x][1],"from":list(map(json.loads,address_dict[x][2]))} for x in address_dict],key=lambda x: x["count"],reverse=True)
+    main_profile["names"] = sorted([{"id":x,"value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict],key=lambda x: x["count"],reverse=True)[:3]
+    main_profile["emails"] = sorted([{"id":x,"value":email_dict[x][0],"count":email_dict[x][1],"from":list(map(json.loads, email_dict[x][2]))} for x in email_dict],key=lambda x: x["count"],reverse=True)
+    main_profile["relationships"] = sorted([{"id":x,"type":"connection","value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict],key=lambda x: x["count"],reverse=True)[3:]
+    main_profile["social_media"] = sorted([{"id":x,"url":social_dict[x][0],"count":social_dict[x][1]} for x in social_dict],key=lambda x: x["count"],reverse=True)
+    
+    return main_profile
+
+
 
 # Called when twitter is scraped...
 @app.route('/search/', methods=['GET'])
 def handle_search():
     q = request.args.get("q")
+    num_pages = request.args.get("n")
+    if num_pages == None:
+        num_pages = 1
     print q
+    print num_pages, "pages"
     
     filelist = glob.glob("data/*")
     for f in filelist:
@@ -249,7 +369,7 @@ def handle_search():
                                  use_idf=True, tokenizer=tokenize_and_stem, ngram_range=(1,3))
     
 
-    urls = get_urls(q)
+    urls = get_urls(q,num_pages)
     texts = []
     good_urls = []
     entries = []
@@ -258,12 +378,21 @@ def handle_search():
         html = ""
         text = ""
         readable_text = ""
+        title = ""
+        entities = []
+        addresses = []
+        rels = []
+        emails  = []
+        phones = []
+        images = []
+        social = False
 
         if url.endswith(".pdf"):
             continue
 
         if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
             data = build_social_json(url,"social")
+            social = True
         else:
             try:
                 html = get_html(url)
@@ -271,9 +400,11 @@ def handle_search():
                 readable_text = get_readability_text(html)
                 addresses = getAddresses(text)
                 entities = getEntities(text)
+                emails = get_emails(text)
+                phones = getPhoneNumbers(text)
+                #images = get_images(url)
                 #ss_text = get_screenshot_text(url,i)
-                data = build_json(url,title,entities,addresses,"page")
-            except (UnicodeDecodeError,IOError,Exception):
+            except (UnicodeDecodeError,IOError,haul.exceptions.RetrieveError):
                 print "Error"
                 continue
             if text == None or text.strip() == "":
@@ -290,14 +421,26 @@ def handle_search():
             out.write(text)
         with codecs.open("data/"+str(i)+".rtxt","w",encoding="utf8",errors="ignore") as out:
             out.write(readable_text)
+        
+        #with codecs.open("data/"+str(i)+".sstxt","w",encoding="utf8",errors="ignore") as out:
+        #    out.write(ss_text)
+        if text != "":
+            pass
+            #rels = getRelationships(str(i)+".txt")
+        else:
+            rels = []
+        if not social:
+            data = build_json(url,title,entities,addresses,"page",rels,emails,phones,images)
         with codecs.open("data/"+str(i)+".json","w",encoding="utf8",errors="ignore") as out:
             out.write(json.dumps(data,indent=2))
             entries.append(data)
-        #with codecs.open("data/"+str(i)+".sstxt","w",encoding="utf8",errors="ignore") as out:
-        #    out.write(ss_text)
-        #print getRelationships(str(i)+".txt")
         idx_out.write(str(i) + "\t" + url + "\n")
     tfidf_matrix = tfidf_vectorizer.fit_transform(texts) #fit the vectorizer to synopses
+    answers = doLDA(texts,q)
+
+    for i,a in enumerate(answers):
+        entries[i]["topic"] = a
+
     #print(tfidf_matrix.shape)
     from sklearn.metrics.pairwise import cosine_similarity
     dist = 1 - cosine_similarity(tfidf_matrix)
@@ -318,12 +461,36 @@ def handle_search():
 
     updateAllNodes(d3Dendro["children"][0])
 
-    return_data = {"pages":entries,"treemap":d3Dendro["children"][0]}
+    profile = build_profile(entries)
+
+    return_data = {"profile":profile,"pages":entries,"treemap":d3Dendro["children"][0]}
 
     with codecs.open("data/data.json","w",encoding="utf8",errors="ignore") as out:
         out.write(json.dumps(return_data,indent=2))
 
-    resp = Response(json.dumps(return_data))
+    '''
+    fig, ax = plt.subplots(figsize=(30, 20)) # set size
+
+    ax = dendrogram(linkage_matrix, orientation="right", labels=good_urls);
+
+    plt.tick_params(\
+        axis= 'x',          # changes apply to the x-axis
+        which='both',      # both major and minor ticks are affected
+        bottom='off',      # ticks along the bottom edge are off
+        top='off',         # ticks along the top edge are off
+        labelbottom='off')
+
+    plt.tight_layout() #show plot with tight layout
+
+    #uncomment below to save figure
+    plt.savefig('ward_clusters.png', dpi=200) #save figure as ward_clusters
+
+    
+
+    plt.close()
+    '''
+    print json.dumps(return_data)
+    resp = Response(json.dumps(return_data,indent=2))
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -335,36 +502,5 @@ if __name__ == "__main__":
     app.run(threaded=True,
         host="0.0.0.0",
         port=(5000)) #ssl_context=context)
-
-
-
-
-
-    #print json.dumps(d3Dendro["children"][0],indent=2)
-
-
-
-    '''
-
-    fig, ax = plt.subplots(figsize=(30, 20)) # set size
-
-    titles = ["0","1","2"]
-    ax = dendrogram(linkage_matrix, orientation="right", labels=good_urls);
-
-    plt.tick_params(\
-        axis= 'x',          # changes apply to the x-axis
-        which='both',      # both major and minor ticks are affected
-        bottom='off',      # ticks along the bottom edge are off
-        top='off',         # ticks along the top edge are off
-        labelbottom='off')
-
-    #plt.tight_layout() #show plot with tight layout
-
-    #uncomment below to save figure
-    plt.savefig('ward_clusters.png', dpi=200) #save figure as ward_clusters
-
     
-
-    plt.close()
-    '''
 
