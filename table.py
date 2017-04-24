@@ -34,7 +34,7 @@ class HTMLTableParser:
 
         # Safeguard on Column Titles
         if len(column_names) > 0 and len(column_names) != n_columns:
-            raise Exception("Column titles do not match the number of columns")
+            return None
 
         columns = column_names if len(column_names) > 0 else range(0,n_columns)
         df = pd.DataFrame(columns = columns,

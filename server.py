@@ -26,6 +26,10 @@ from gensim import corpora
 from collections import defaultdict
 from gensim.models.hdpmodel import HdpModel
 import haul
+from sklearn.metrics.pairwise import cosine_similarity
+import matplotlib.pyplot as plt
+
+from scipy.cluster.hierarchy import ward, dendrogram,linkage, to_tree
 
 try:
     import Image
@@ -48,8 +52,16 @@ entity_dict = {}
 address_dict = {}
 email_dict = {}
 phone_dict = {}
+text_dict = {}
+dislike_page_set = set() 
 
 app = Flask(__name__)
+
+name = "unknown"
+data_state = {}
+
+resp = Response(json.dumps({"success":True}))
+resp.headers['Access-Control-Allow-Origin'] = '*'
 
 regex = re.compile(("([a-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+\/=?^_`"
                     "{|}~-]+)*(@|\sat\s)(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(\.|"
@@ -123,7 +135,7 @@ def get_emails(text):
     # mistakenly matches patterns like 'http://foo@bar.com' as '//foo@bar.com'.
     ret = []
     for email in (email[0] for email in re.findall(regex, text) if not email[0].startswith('//')):
-        email_dict[email] = email_dict.get(email,"e"+str(len(email_dict)))
+        email_dict[email] = email_dict.get(email,"em"+str(len(email_dict)))
         ret.append({"id":email_dict[email],"value":email})
     return ret
 
@@ -182,11 +194,13 @@ def getRelationships(location):
     results = process_entity_relations(results_str)
     return results
 
-def get_tables(url):
+def get_tables(url,i):
     tp = HTMLTableParser()
     tables = tp.parse_url(url)
-    for table in tables:
-        print table.head()
+    for j, table in enumerate(tables):
+        if table is not None:
+            table.applymap(lambda x:x.strip().replace("\t"," ") if type(x) == str else x)
+            table.to_csv("data/" + str(i) + "_"+ str(j) + ".csv",header=True,sep="\t")
 
 def get_html(url):
     headers = headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2172.95 Safari/537.36'}
@@ -235,10 +249,10 @@ def is_float(s):
         return  False
 
 def build_social_json(url,ptype):
-    page_dict[url] = page_dict.get(url,"p"+str(len(page_dict)))
-    return {
+    pid = page_dict.get(url,"p"+str(len(page_dict)))
+    data = {
         "url":url,
-        "id":page_dict[url],
+        "id":pid,
         "title":None,
         "profile":{
             "names":[],
@@ -254,12 +268,14 @@ def build_social_json(url,ptype):
         "entities":[],
         "type":ptype,
     }
+    page_dict[url] = data
+    return data
 
 def build_json(url,title,entities,addresses,ptype,rels,emails,phones,images):
-    page_dict[url] = page_dict.get(url,"p"+str(len(page_dict)))
-    return {
+    pid = page_dict.get(url,"p"+str(len(page_dict)))
+    data = {
         "url":url,
-        "id":page_dict[url],
+        "id":pid,
         "title":title,
         "profile":{
             "names":[],
@@ -275,6 +291,8 @@ def build_json(url,title,entities,addresses,ptype,rels,emails,phones,images):
         "entities":entities,
         "type":ptype, 
     }
+    page_dict[url] = data
+    return data
 
 def updateAllNodes (node):
     if len(node["children"]) == 0:
@@ -350,34 +368,149 @@ def build_profile(entries):
     
     return main_profile
 
+# Called when a name is given
+@app.route('/name/', methods=['GET'])
+def handle_name():
+    global data_state
+    print data_state
+    print "GET: Name"
+    global name
+    name = request.args.get("name")
+    os.system("mkdir -p ./saves/"+name)
+    return resp
 
 
-# Called when twitter is scraped...
-@app.route('/search/', methods=['GET'])
-def handle_search():
-    q = request.args.get("q")
-    num_pages = request.args.get("n")
-    if num_pages == None:
-        num_pages = 1
-    print q
-    print num_pages, "pages"
-    
-    filelist = glob.glob("data/*")
-    for f in filelist:
-        os.remove(f)
+# Called when something is unliked
+@app.route('/unlike/', methods=['GET'])
+def handle_unlike():
+    print "GET: Unlike"
+    sid = request.args.get("id")
+    if sid.startswith("p"):
+        for page in page_dict:
+            if page_dict[page]["id"] == sid:
+                mark = page
+                break
+        del page_dict[mark]
+        del text_dict[mark]
+        dislike_page_set.add(mark)
 
-    idx_out = codecs.open("data/idx.txt","w",encoding="utf8")
+    return crunch()
 
-    #define vectorizer parameters
+# Called when something is liked
+@app.route('/like/', methods=['GET'])
+def handle_like():
+    print "GET: Like"
+    sid = request.args.get("id")
+    if sid.startswith("phone"):
+        for phone in phone_dict:
+            if phone_dict[phone] == sid:
+                return new_search(phone)
+
+# Called when clear is clicked
+@app.route('/clear/', methods=['GET'])
+def handle_clear():
+    global name, url_dict, terms_hash, socials, urls_to_content, prompts, socials
+    global action_count, last_url
+
+    name = "unknown"
+    url_dict = {}
+    terms_hash = {}
+    urls_to_content = {}
+    prompts = {}
+    socials = {}
+    action_count = 0
+    last_url = None
+
+
+    print "GET: Clear"
+    return resp
+
+
+# Called when reload is clicked
+@app.route('/reload/', methods=['GET'])
+def handle_reload():
+    global name, url_dict, terms_hash, socials, urls_to_content, prompts, socials
+    print "GET: Reload"
+
+    name = request.args.get("name")
+    with codecs.open("./saves/" + name + "/butler_data.json","r",encoding="utf8") as ip:
+        data_dump = loads(ip.read())
+        url_dict = data_dump["urls"]
+        terms_hash = data_dump["terms"]
+        socials = data_dump["social"]
+        urls_to_content = data_dump["urls_to_content"]
+
+    print len(url_dict)
+    return resp
+
+# Called when save/export is clicked
+@app.route('/save_export/', methods=['GET'])
+def handle_save():
+    global name
+    global url_dict, terms_hash, socials
+    data_dump = {"urls":url_dict,"terms":terms_hash,"social":socials,"urls_to_content":urls_to_content}
+    print "GET: Save"
+    with codecs.open("./saves/" + name + "/butler_data.json","w",encoding="utf8") as output:
+        output.write(json.dumps(data_dump,indent=2))
+
+    return resp
+
+def crunch():
+
+    q = "CHANGE ME"
+
+    global data_state
+
+    entries, texts, good_urls = [],[],[]
+    for p in page_dict:
+        entries.append(page_dict[p])
+        good_urls.append(p)
+        texts.append(text_dict[p])
+
     tfidf_vectorizer = TfidfVectorizer(max_df=0.8, max_features=200000,
                                  min_df=0.2, stop_words='english',
                                  use_idf=True, tokenizer=tokenize_and_stem, ngram_range=(1,3))
-    
 
+    tfidf_matrix = tfidf_vectorizer.fit_transform(texts) #fit the vectorizer to synopses
+    answers = doLDA(texts,q)
+
+    for i,a in enumerate(answers):
+        entries[i]["topic"] = a
+
+    dist = 1 - cosine_similarity(tfidf_matrix)
+
+    linkage_matrix = linkage(dist) #define the linkage_matrix using ward clustering pre-computed distances
+
+    tree = to_tree(linkage_matrix)
+
+    d3Dendro = dict(children=[], name="Top",count=len(good_urls))
+    add_node(tree, d3Dendro, good_urls)
+
+    updateAllNodes(d3Dendro["children"][0])
+
+    profile = build_profile(entries)
+
+    return_data = {"profile":profile,"pages":entries,"treemap":d3Dendro["children"][0]}
+
+    data_state = return_data
+
+    resp = Response(json.dumps(return_data,indent=2))
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
+
+def new_search(q,num_pages=1):
+    global data_state
+    print q
+    print num_pages, "pages"
     urls = get_urls(q,num_pages)
     texts = []
     good_urls = []
     entries = []
+
+    for url in page_dict:
+        entries.append(page_dict[url])
+        texts.append(text_dict[url])
+        good_urls.append(url)
     for i,url in enumerate(urls):
         print url
         html = ""
@@ -392,11 +525,17 @@ def handle_search():
         images = []
         social = False
 
-        if url.endswith(".pdf") or any(map(url.startswith,stop)):
+        if url in page_dict:
+            entries.append(page_dict[url])
+            texts.append(text_dict[url])
+            continue
+
+        if url in dislike_page_set or url.endswith(".pdf") or any(map(url.startswith,stop)):
             print "Skipping..."
             continue
 
         if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
+            print "Social"
             data = build_social_json(url,"social")
             social = True
         else:
@@ -417,19 +556,22 @@ def handle_search():
                 print "No Text..."
                 continue
         texts.append(text)
+        text_dict[url] = text
 
-        #get_tables(url)
+        #get_tables(url,i)
         
         good_urls.append(url)
-        with codecs.open("data/"+str(i)+".html","w",encoding="utf8",errors="ignore") as out:
-            out.write(html)
-        with codecs.open("data/"+str(i)+".txt","w",encoding="utf8",errors="ignore") as out:
-            out.write(text)
-        with codecs.open("data/"+str(i)+".rtxt","w",encoding="utf8",errors="ignore") as out:
-            out.write(readable_text)
+
+        #with codecs.open("data/"+str(i)+".html","w",encoding="utf8",errors="ignore") as out:
+        #    out.write(html)
+        #with codecs.open("data/"+str(i)+".txt","w",encoding="utf8",errors="ignore") as out:
+        #    out.write(text)
+        #with codecs.open("data/"+str(i)+".rtxt","w",encoding="utf8",errors="ignore") as out:
+        #    out.write(readable_text)
         
         #with codecs.open("data/"+str(i)+".sstxt","w",encoding="utf8",errors="ignore") as out:
         #    out.write(ss_text)
+
         if text != "":
             pass
             #rels = getRelationships(str(i)+".txt")
@@ -437,10 +579,13 @@ def handle_search():
             rels = []
         if not social:
             data = build_json(url,title,entities,addresses,"page",rels,emails,phones,images)
-        with codecs.open("data/"+str(i)+".json","w",encoding="utf8",errors="ignore") as out:
-            out.write(json.dumps(data,indent=2))
-            entries.append(data)
-        idx_out.write(str(i) + "\t" + url + "\n")
+        #with codecs.open("data/"+str(i)+".json","w",encoding="utf8",errors="ignore") as out:
+        #    out.write(json.dumps(data,indent=2))
+        entries.append(data)
+        #idx_out.write(str(i) + "\t" + url + "\n")
+    tfidf_vectorizer = TfidfVectorizer(max_df=0.8, max_features=200000,
+                                 min_df=0.2, stop_words='english',
+                                 use_idf=True, tokenizer=tokenize_and_stem, ngram_range=(1,3))
     tfidf_matrix = tfidf_vectorizer.fit_transform(texts) #fit the vectorizer to synopses
     answers = doLDA(texts,q)
 
@@ -448,13 +593,9 @@ def handle_search():
         entries[i]["topic"] = a
 
     #print(tfidf_matrix.shape)
-    from sklearn.metrics.pairwise import cosine_similarity
     dist = 1 - cosine_similarity(tfidf_matrix)
-    idx_out.close()
-    #print dist
-    import matplotlib.pyplot as plt
-
-    from scipy.cluster.hierarchy import ward, dendrogram,linkage, to_tree
+    
+    #idx_out.close()
 
     linkage_matrix = linkage(dist) #define the linkage_matrix using ward clustering pre-computed distances
     #print good_urls
@@ -471,29 +612,145 @@ def handle_search():
 
     return_data = {"profile":profile,"pages":entries,"treemap":d3Dendro["children"][0]}
 
-    with codecs.open("data/data.json","w",encoding="utf8",errors="ignore") as out:
-        out.write(json.dumps(return_data,indent=2))
+    data_state = return_data
 
+    #with codecs.open("data/data.json","w",encoding="utf8",errors="ignore") as out:
+    #    out.write(json.dumps(return_data,indent=2))
+
+    print json.dumps(return_data)
+    resp = Response(json.dumps(return_data,indent=2))
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
+
+
+
+
+# Called when twitter is scraped...
+@app.route('/search/', methods=['GET'])
+def handle_search():
+    global data_state
+    q = request.args.get("q")
+    num_pages = request.args.get("n")
+    if num_pages == None:
+        num_pages = 1
+    print q
+    print num_pages, "pages"
     
-    fig, ax = plt.subplots(figsize=(30, 20)) # set size
+    #filelist = glob.glob("data/*")
+    #for f in filelist:
+    #    os.remove(f)
 
-    ax = dendrogram(linkage_matrix, orientation="right", labels=good_urls);
+    #idx_out = codecs.open("data/idx.txt","w",encoding="utf8")
 
-    plt.tick_params(\
-        axis= 'x',          # changes apply to the x-axis
-        which='both',      # both major and minor ticks are affected
-        bottom='off',      # ticks along the bottom edge are off
-        top='off',         # ticks along the top edge are off
-        labelbottom='off')
+    urls = get_urls(q,num_pages)
+    texts = []
+    good_urls = []
+    entries = []
+    for i,url in enumerate(urls):
+        print url
+        html = ""
+        text = ""
+        readable_text = ""
+        title = ""
+        entities = []
+        addresses = []
+        rels = []
+        emails  = []
+        phones = []
+        images = []
+        social = False
 
-    plt.tight_layout() #show plot with tight layout
+        if url in page_dict:
+            entries.append(page_dict[url])
+            texts.append(text_dict[url])
+            continue
 
-    #uncomment below to save figure
-    plt.savefig('ward_clusters.png', dpi=200) #save figure as ward_clusters
+        if url in dislike_page_set or url.endswith(".pdf") or any(map(url.startswith,stop)):
+            print "Skipping..."
+            continue
 
+        if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
+            print "Social"
+            data = build_social_json(url,"social")
+            social = True
+        else:
+            try:
+                html = get_html(url)
+                text,title = get_text_title(html)
+                readable_text = get_readability_text(html)
+                addresses = getAddresses(text)
+                entities = getEntities(text)
+                emails = get_emails(text)
+                phones = getPhoneNumbers(text)
+                #images = get_images(url)
+                #ss_text = get_screenshot_text(url,i)
+            except (UnicodeDecodeError,IOError,haul.exceptions.RetrieveError,Exception):
+                print "Error..."
+                continue
+            if text == None or text.strip() == "":
+                print "No Text..."
+                continue
+        texts.append(text)
+        text_dict[url] = text
+
+        #get_tables(url,i)
+        
+        good_urls.append(url)
+
+        #with codecs.open("data/"+str(i)+".html","w",encoding="utf8",errors="ignore") as out:
+        #    out.write(html)
+        #with codecs.open("data/"+str(i)+".txt","w",encoding="utf8",errors="ignore") as out:
+        #    out.write(text)
+        #with codecs.open("data/"+str(i)+".rtxt","w",encoding="utf8",errors="ignore") as out:
+        #    out.write(readable_text)
+        
+        #with codecs.open("data/"+str(i)+".sstxt","w",encoding="utf8",errors="ignore") as out:
+        #    out.write(ss_text)
+
+        if text != "":
+            pass
+            #rels = getRelationships(str(i)+".txt")
+        else:
+            rels = []
+        if not social:
+            data = build_json(url,title,entities,addresses,"page",rels,emails,phones,images)
+        #with codecs.open("data/"+str(i)+".json","w",encoding="utf8",errors="ignore") as out:
+        #    out.write(json.dumps(data,indent=2))
+        entries.append(data)
+        #idx_out.write(str(i) + "\t" + url + "\n")
+    tfidf_vectorizer = TfidfVectorizer(max_df=0.8, max_features=200000,
+                                 min_df=0.2, stop_words='english',
+                                 use_idf=True, tokenizer=tokenize_and_stem, ngram_range=(1,3))
+    tfidf_matrix = tfidf_vectorizer.fit_transform(texts) #fit the vectorizer to synopses
+    answers = doLDA(texts,q)
+
+    for i,a in enumerate(answers):
+        entries[i]["topic"] = a
+
+    #print(tfidf_matrix.shape)
+    dist = 1 - cosine_similarity(tfidf_matrix)
     
+    #idx_out.close()
 
-    plt.close()
+    linkage_matrix = linkage(dist) #define the linkage_matrix using ward clustering pre-computed distances
+    #print good_urls
+    #print linkage_matrix
+
+    tree = to_tree(linkage_matrix)
+    #print tree
+    d3Dendro = dict(children=[], name="Top",count=len(good_urls))
+    add_node(tree, d3Dendro, good_urls)
+
+    updateAllNodes(d3Dendro["children"][0])
+
+    profile = build_profile(entries)
+
+    return_data = {"profile":profile,"pages":entries,"treemap":d3Dendro["children"][0]}
+
+    data_state = return_data
+
+    #with codecs.open("data/data.json","w",encoding="utf8",errors="ignore") as out:
+    #    out.write(json.dumps(return_data,indent=2))
 
     print json.dumps(return_data)
     resp = Response(json.dumps(return_data,indent=2))
