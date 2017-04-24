@@ -1,4 +1,7 @@
+pyap
 flask
+spacy
+selenium
 Google-Search-API
 beautifulsoup4
 sklearn
@@ -12,3 +15,4 @@ Pillow
 pytesseract
 matplotlib
 scipy
+readability-lxml
