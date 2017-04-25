@@ -28,6 +28,7 @@ from gensim.models.hdpmodel import HdpModel
 import haul
 from sklearn.metrics.pairwise import cosine_similarity
 import matplotlib.pyplot as plt
+import pickle
 
 from scipy.cluster.hierarchy import ward, dendrogram,linkage, to_tree
 
@@ -53,7 +54,8 @@ address_dict = {}
 email_dict = {}
 phone_dict = {}
 text_dict = {}
-dislike_page_set = set() 
+dislike_page_set = set()
+dislike_phone_set = set() 
 
 app = Flask(__name__)
 
@@ -124,8 +126,9 @@ def getPhoneNumbers(text):
     phones = []
     for match in re.finditer(r"\(?\b[2-9][0-9]{2}\)?[-. ]?[2-9][0-9]{2}[-. ]?[0-9]{4}\b", text):
         match = match.group()
-        phone_dict[match] = phone_dict.get(match,"phone"+str(len(phone_dict)))
-        phones.append({"id":phone_dict[match],"value":match})
+        if match not in dislike_page_set:
+            phone_dict[match] = phone_dict.get(match,"phone"+str(len(phone_dict)))
+            phones.append({"id":phone_dict[match],"value":match})
     return phones
 
 
@@ -385,7 +388,20 @@ def handle_name():
 def handle_unlike():
     print "GET: Unlike"
     sid = request.args.get("id")
-    if sid.startswith("p"):
+    if sid.startswith("phone"):
+        for phone in phone_dict:
+            if phone_dict[phone] == sid:
+                print "found match!!!"
+                dislike_phone_set.add(phone)
+                for page in page_dict:
+                    marks = []
+                    for i,p in enumerate(page_dict[page]["profile"]["phone_numbers"]):
+                        if sid == p["id"]:
+                            marks.append(i)
+                            break
+                    for mark in marks:
+                        del page_dict[page]["profile"]["phone_numbers"][mark]
+    elif sid.startswith("p"):
         for page in page_dict:
             if page_dict[page]["id"] == sid:
                 mark = page
@@ -393,7 +409,7 @@ def handle_unlike():
         del page_dict[mark]
         del text_dict[mark]
         dislike_page_set.add(mark)
-
+    
     return crunch()
 
 # Called when something is liked
@@ -409,46 +425,68 @@ def handle_like():
 # Called when clear is clicked
 @app.route('/clear/', methods=['GET'])
 def handle_clear():
-    global name, url_dict, terms_hash, socials, urls_to_content, prompts, socials
-    global action_count, last_url
+    global page_dict, entity_dict, address_dict, email_dict, phone_dict, text_dict, dislike_page_set
+    global dislike_phone_set, name, data_state
+
+    page_dict = {}
+    entity_dict = {}
+    address_dict = {}
+    email_dict = {}
+    phone_dict = {}
+    text_dict = {}
+    dislike_page_set = set()
+    dislike_phone_set = set() 
 
     name = "unknown"
-    url_dict = {}
-    terms_hash = {}
-    urls_to_content = {}
-    prompts = {}
-    socials = {}
-    action_count = 0
-    last_url = None
-
-
+    data_state = {}
     print "GET: Clear"
     return resp
 
 
 # Called when reload is clicked
+@app.route('/current/', methods=['GET'])
+def handle_current():
+    resp = Response(json.dumps(data_state,indent=2))
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
+
+# Called when reload is clicked
 @app.route('/reload/', methods=['GET'])
 def handle_reload():
-    global name, url_dict, terms_hash, socials, urls_to_content, prompts, socials
+    global page_dict, entity_dict, address_dict, email_dict, phone_dict, text_dict, dislike_page_set
+    global dislike_phone_set, name, data_state
     print "GET: Reload"
 
     name = request.args.get("name")
     with codecs.open("./saves/" + name + "/butler_data.json","r",encoding="utf8") as ip:
-        data_dump = loads(ip.read())
-        url_dict = data_dump["urls"]
-        terms_hash = data_dump["terms"]
-        socials = data_dump["social"]
-        urls_to_content = data_dump["urls_to_content"]
-
-    print len(url_dict)
+        data_dump = json.loads(ip.read())
+        page_dict = data_dump["page_dict"]
+        entity_dict = data_dump["entity_dict"]
+        address_dict = data_dump["address_dict"]
+        email_dict = data_dump["email_dict"]
+        phone_dict = data_dump["phone_dict"]
+        text_dict = data_dump["text_dict"]
+        data_state = data_dump["data_state"]
+        with open ("./saves/" + name + "/dislike_page_set.json", 'rb') as fp:
+            dislike_page_set = pickle.load(fp) 
     return resp
 
 # Called when save/export is clicked
 @app.route('/save_export/', methods=['GET'])
 def handle_save():
-    global name
-    global url_dict, terms_hash, socials
-    data_dump = {"urls":url_dict,"terms":terms_hash,"social":socials,"urls_to_content":urls_to_content}
+    global page_dict, entity_dict, address_dict, email_dict, phone_dict, text_dict, dislike_page_set
+    global dislike_phone_set, name, data_state
+    data_dump = {"page_dict":page_dict,
+        "entity_dict":entity_dict,
+        "address_dict":address_dict,
+        "email_dict":email_dict,
+        "phone_dict":phone_dict,
+        "text_dict":text_dict,
+        "data_state":data_state
+        }
+    with open("./saves/" + name + "/dislike_page_set.json", 'wb') as fp:
+        pickle.dump(dislike_page_set, fp)
+
     print "GET: Save"
     with codecs.open("./saves/" + name + "/butler_data.json","w",encoding="utf8") as output:
         output.write(json.dumps(data_dump,indent=2))
