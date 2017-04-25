@@ -701,6 +701,7 @@ def handle_search():
         if url in page_dict:
             entries.append(page_dict[url])
             texts.append(text_dict[url])
+            good_urls.append(url)
             continue
 
         if url in dislike_page_set or url.endswith(".pdf") or any(map(url.startswith,stop)):
