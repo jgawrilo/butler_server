@@ -31,6 +31,10 @@ import matplotlib.pyplot as plt
 import pickle
 import random
 
+from elasticsearch import Elasticsearch
+
+nes = Elasticsearch(["http://10.1.92.76:9200/"])
+
 from scipy.cluster.hierarchy import ward, dendrogram,linkage, to_tree
 
 try:
@@ -408,6 +412,7 @@ def handle_name():
     print "GET: Name"
     global name
     name = request.args.get("name")
+    nes.index(index="butler", doc_type="searches",body={"name":name,"data":{}},id=name)
     session['name'] = name   # Save in session
     data_state[name] = {}
     os.system("mkdir -p ./saves/"+name)
@@ -482,6 +487,21 @@ def handle_current():
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
+@app.route('/get_searches/',methods=['GET'])
+def handle_get_searches():
+    query = {
+        "size": 0,
+        "aggs" : {
+            "searches" : {
+                "terms" : { "field" : "name" }
+            }
+    }}
+    result = nes.search(index="butler", doc_type="searches", body=query)
+    resp = Response(json.dumps(result["aggregations"]["searches"]["buckets"],indent=2))
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
+
+
 # Called when reload is clicked
 @app.route('/reload/', methods=['GET'])
 def handle_reload():
@@ -522,6 +542,8 @@ def handle_save():
     print "GET: Save"
     with codecs.open("./saves/" + name + "/butler_data.json","w",encoding="utf8") as output:
         output.write(json.dumps(data_dump,indent=2))
+
+    nes.index(index="butler", doc_type="searches",body={"name":name,"data":data_dump},id=name)
 
     return resp
 
@@ -633,7 +655,7 @@ def new_search(q,num_pages=1):
         good_urls.append(url)
 
         #with codecs.open("data/"+str(i)+".html","w",encoding="utf8",errors="ignore") as out:
-        #    out.write(html)
+        #t    out.write(html)
         #with codecs.open("data/"+str(i)+".txt","w",encoding="utf8",errors="ignore") as out:
         #    out.write(text)
         #with codecs.open("data/"+str(i)+".rtxt","w",encoding="utf8",errors="ignore") as out:
@@ -798,6 +820,8 @@ def handle_search():
     answers = doLDA(texts,q)
 
     for i,a in enumerate(answers):
+        if a:
+            a["string"] = ",".join(map(lambda x:x["value"], a["scores"]))
         entries[i]["topic"] = a
 
     #print(tfidf_matrix.shape)
