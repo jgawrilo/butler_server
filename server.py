@@ -21,7 +21,7 @@ from subprocess import Popen
 from sys import stderr
 from nltk.corpus import stopwords
 
-from flask import Flask, request, Response
+from flask import Flask, request, Response, session, escape
 from gensim import corpora
 from collections import defaultdict
 from gensim.models.hdpmodel import HdpModel
@@ -29,6 +29,7 @@ import haul
 from sklearn.metrics.pairwise import cosine_similarity
 import matplotlib.pyplot as plt
 import pickle
+import random
 
 from scipy.cluster.hierarchy import ward, dendrogram,linkage, to_tree
 
@@ -58,6 +59,7 @@ dislike_page_set = set()
 dislike_phone_set = set() 
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'nitsuj'
 
 name = "unknown"
 data_state = {}
@@ -86,6 +88,23 @@ social_mappings = [
 stop = [
     "https://en.wikipedia.org"
 ]
+
+
+def LoadUserAgents(uafile="user_agents.txt"):
+    """
+    uafile : string
+        path to text file of user agents, one per line
+    """
+    uas = []
+    with open(uafile, 'rb') as uaf:
+        for ua in uaf.readlines():
+            if ua:
+                uas.append(ua.strip()[1:-1-1])
+    random.shuffle(uas)
+    return uas
+
+# load the user agents, in random order
+user_agents = LoadUserAgents(uafile="user_agents.txt")
 
 def visible(element):
     if element.parent.name in ['style', 'script', '[document]', 'head', 'title']:
@@ -206,7 +225,11 @@ def get_tables(url,i):
             table.to_csv("data/" + str(i) + "_"+ str(j) + ".csv",header=True,sep="\t")
 
 def get_html(url):
-    headers = headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2172.95 Safari/537.36'}
+    ua = random.choice(user_agents)  # select a random user agent
+    headers = {
+    "Connection" : "close",  # another way to cover tracks
+    "User-Agent" : ua
+    }
     response = requests.get(url,headers=headers)
     html = response.content.encode("utf-8","ignore")
     return html
@@ -258,14 +281,20 @@ def build_social_json(url,ptype):
         "id":pid,
         "title":None,
         "profile":{
-            "names":[],
+            "names":[{
+            "value":"Unknown"
+            }],
             "emails":[],
             "phone_numbers":[],
             "addresses":[],
             "relationships":[],
-            "usernames":[],
+            "usernames":[{
+            "value":"Unknown"
+            }],
             "other":[],
-            "images":[],
+            "images":[{
+            "url":"http://simpleicon.com/wp-content/uploads/user1.png"
+            }],
             "videos":[]
         },
         "entities":[],
@@ -326,7 +355,6 @@ def build_profile(entries):
             "phone_numbers":[],
             "addresses":[],
             "relationships":[],
-            "usernames":[],
             "other":[],
             "images":[],
             "videos":[],
@@ -340,7 +368,7 @@ def build_profile(entries):
 
     for e in entries:
         if e["type"] == "social":
-            social_dict[e["id"]] = social_dict.get(e["id"],[e["url"],0])
+            social_dict[e["id"]] = social_dict.get(e["id"],[e["url"],0,e["profile"]["images"][0]["url"],e["profile"]["usernames"][0]["value"]])
             social_dict[e["id"]][1] += 1
             continue
 
@@ -367,9 +395,10 @@ def build_profile(entries):
     main_profile["names"] = sorted([{"id":x,"value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict],key=lambda x: len(x["from"]),reverse=True)[:3]
     main_profile["emails"] = sorted([{"id":x,"value":email_dict[x][0],"count":email_dict[x][1],"from":list(map(json.loads, email_dict[x][2]))} for x in email_dict],key=lambda x: len(x["from"]),reverse=True)
     main_profile["relationships"] = sorted([{"id":x,"type":"connection","value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict],key=lambda x: len(x["from"]),reverse=True)[3:]
-    main_profile["social_media"] = sorted([{"id":x,"url":social_dict[x][0],"count":social_dict[x][1]} for x in social_dict],key=lambda x: x["count"],reverse=True)
+    main_profile["social_media"] = sorted([{"id":x,"url":social_dict[x][0],"count":social_dict[x][1],"profile_url":social_dict[x][2],"username":social_dict[x][3]} for x in social_dict],key=lambda x: x["count"],reverse=True)
     
     return main_profile
+
 
 # Called when a name is given
 @app.route('/name/', methods=['GET'])
@@ -379,6 +408,8 @@ def handle_name():
     print "GET: Name"
     global name
     name = request.args.get("name")
+    session['name'] = name   # Save in session
+    data_state[name] = {}
     os.system("mkdir -p ./saves/"+name)
     return resp
 
@@ -440,6 +471,7 @@ def handle_clear():
     name = "unknown"
     data_state = {}
     print "GET: Clear"
+    session.pop('name', None)
     return resp
 
 
