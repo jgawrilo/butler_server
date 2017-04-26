@@ -703,6 +703,8 @@ def handle_search():
     num_pages = request.args.get("n")
     if num_pages == None:
         num_pages = 1
+    else:
+        num_pages = int(num_pages)
     print q
     print num_pages, "pages"
     
