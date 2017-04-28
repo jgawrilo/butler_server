@@ -446,7 +446,8 @@ def handle_unlike():
         del text_dict[mark]
         dislike_page_set.add(mark)
     
-    return crunch()
+    crunch()
+    return resp
 
 # Called when something is liked
 @app.route('/like/', methods=['GET'])
@@ -456,7 +457,8 @@ def handle_like():
     if sid.startswith("phone"):
         for phone in phone_dict:
             if phone_dict[phone] == sid:
-                return new_search(phone)
+                new_search(phone)
+    return resp
 
 # Called when clear is clicked
 @app.route('/clear/', methods=['GET'])
@@ -520,7 +522,9 @@ def handle_reload():
         text_dict = data_dump["text_dict"]
         data_state = data_dump["data_state"]
         with open ("./saves/" + name + "/dislike_page_set.json", 'rb') as fp:
-            dislike_page_set = pickle.load(fp) 
+            dislike_page_set = pickle.load(fp)
+    resp = Response(json.dumps(data_state,indent=2))
+    resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
 # Called when save/export is clicked
@@ -543,9 +547,13 @@ def handle_save():
     with codecs.open("./saves/" + name + "/butler_data.json","w",encoding="utf8") as output:
         output.write(json.dumps(data_dump,indent=2))
 
-    nes.index(index="butler", doc_type="searches",body={"name":name,"data":data_dump},id=name)
+    #nes.index(index="butler", doc_type="searches",body={"name":name,"data":data_dump},id=name)
 
     return resp
+
+@app.route('/crunch/',methods=['GET'])
+def handle_crunch():
+    return crunch()
 
 def crunch():
 
