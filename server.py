@@ -502,8 +502,19 @@ def handle_save():
 
 @app.route('/crunch/',methods=['GET'])
 def handle_crunch():
+    #name = request.args.get("name")
+    #return crunch(name)
     name = request.args.get("name")
-    return crunch(name)
+    print "GET: Crunch ->", name
+    qs = getQueries(name)
+    q, num_pages = qs[-1]
+    num_pages += 1
+    nes.index(index="butler", doc_type="queries",body={"name":name,"query":q,"time":datetime.now().isoformat(), "num_pages":num_pages})
+    return_data = process_search(q,name,num_pages)
+    resp = Response(json.dumps(return_data,indent=2))
+    nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
 
 def crunch(name):
 
@@ -696,7 +707,7 @@ def getLikesUnlikes(name):
     likes = nes.search(index="butler", doc_type="likes", body=query)
     unlikes = nes.search(index="butler", doc_type="unlikes", body=query)
 
-    return set(map(lambda x: x["id"], likes["hits"]["hits"])), set(map(lambda x: x["id"], unlikes["hits"]["hits"]))
+    return set(map(lambda x: x["_source"]["id"], likes["hits"]["hits"])), set(map(lambda x: x["_source"]["id"], unlikes["hits"]["hits"]))
 
 
 # Called when twitter is scraped...
