@@ -128,12 +128,13 @@ def process_entity_relations(entity_relations_str,entities):
     entity_relations = list()
     for s in entity_relations_str:
         a,b,c = s[s.find("(") + 1:s.find(")")].split(';')
-        if a == "Justin Gawrilow":
+        if a.strip() == "Justin Gawrilow":
             return_list.append([{"id":"other"+hashlib.md5(" ".join([x[0],x[1],x[2]])).hexdigest(),"value":" ".join([x[0],x[1],x[2]])} for x in entity_relations])
             entity_relations = []
             continue
         if a.upper() in entity_set or b.upper() in entity_set:
             entity_relations.append(s[s.find("(") + 1:s.find(")")].split(';'))
+    return_list.append([{"id":"other"+hashlib.md5(" ".join([x[0],x[1],x[2]])).hexdigest(),"value":" ".join([x[0],x[1],x[2]])} for x in entity_relations])
     return return_list
 
 def getOther(text,likes,unlikes):
@@ -688,8 +689,9 @@ def process_search(q,name,num_pages=1):
     print "Processing Relationships", len(texts), len(entries)
     all_rels = getRelationships(texts,all_entities)
     print len(all_rels)
+    print all_rels
     for i,rel in enumerate(all_rels):
-        entries[i]["other"] = rel
+        entries[i]["profile"]["other"] = rel
 
 
     tfidf_vectorizer = TfidfVectorizer(tokenizer=tokenize_and_stem)
