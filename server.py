@@ -35,7 +35,7 @@ from datetime import datetime
 from elasticsearch import Elasticsearch
 import hashlib
 
-nes = Elasticsearch(["http://localhost:9200/"])
+nes = Elasticsearch(["http://10.1.92.76:9200/"])
 
 from scipy.cluster.hierarchy import ward, dendrogram,linkage, to_tree
 
@@ -118,41 +118,61 @@ def tokenize_and_stem(text):
     stems = [stemmer.stem(t) for t in filtered_tokens]
     return stems
 
-def process_entity_relations(entity_relations_str):
+def process_entity_relations(entity_relations_str,entities):
+
+    entity_set = set()
+    for e in entities:
+        entity_set.add(e["value"])
     # format is ollie.
+    return_list = []
     entity_relations = list()
     for s in entity_relations_str:
-        entity_relations.append(s[s.find("(") + 1:s.find(")")].split(';'))
-    return [{"a":x[0],"rel":x[1],"b":x[2]} for x in entity_relations]
+        a,b,c = s[s.find("(") + 1:s.find(")")].split(';')
+        if a == "Justin Gawrilow":
+            return_list.append([{"id":"other"+hashlib.md5(" ".join([x[0],x[1],x[2]])).hexdigest(),"value":" ".join([x[0],x[1],x[2]])} for x in entity_relations])
+            entity_relations = []
+            continue
+        if a.upper() in entity_set or b.upper() in entity_set:
+            entity_relations.append(s[s.find("(") + 1:s.find(")")].split(';'))
+    return return_list
 
-def getEntities(text):
+def getOther(text,likes,unlikes):
+    entity_relations = list()
+    relation = "Vlad is CEO of CSA"
+    pid = "other" + hashlib.md5(relation).hexdigest()
+    entity_relations.append({"id": pid, "value":relation})
+    return entity_relations
+
+def getEntities(text,likes,unlikes):
     ent_dict = {}
     for ent in nlp(unicode(text)).ents:
         ent_txt = ' '.join(ent.text.split()).upper().replace("\\n","").strip()
         ent_dict[(ent_txt,ent.label_)] = ent_dict.get((ent_txt,ent.label_),0)
         ent_dict[(ent_txt,ent.label_)] += 1
     return [{"value":x[0],"type":x[1],"count":ent_dict[x],"id":"entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest()} for x in ent_dict if x[1] not in 
-    ["CARDINAL","DATE","MONEY","PERCENT","TIME","WORK_OF_ART"]]
+    ["CARDINAL","DATE","MONEY","PERCENT","TIME","WORK_OF_ART"] and "entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest() not in unlikes]
 
-def getPhoneNumbers(text):
+def getPhoneNumbers(text,likes,unlikes):
     phones = []
     for match in re.finditer(r"\(?\b[2-9][0-9]{2}\)?[-. ]?[2-9][0-9]{2}[-. ]?[0-9]{4}\b", text):
         match = match.group()
-        if match not in dislike_page_set:
-            pid = "phone" + hashlib.md5(match).hexdigest()
+        pid = "phone" + hashlib.md5(match).hexdigest()
+        if pid not in unlikes:
             phones.append({"id":pid,"value":match})
     return phones
 
 
-def get_emails(text):
+def get_emails(text,likes,unlikes):
     ret = []
     for email in (email[0] for email in re.findall(regex, text) if not email[0].startswith('//')):
-        ret.append({"id":"email"+hashlib.md5(email).hexdigest(),"value":email})
+        eid = "email"+hashlib.md5(email).hexdigest()
+        if eid not in unlikes:
+            ret.append({"id":eid,"value":email})
     return ret
 
 def doLDA(documents,query):
     # remove common words and tokenize
-    stoplist = set(stopwords.words('english')).union(set([x.lower() for x in query.split()]))
+    stoplist = set(stopwords.words('english')).union(set([x.lower() for x in " ".join(query).split()]))
     texts = [[word for word in document.lower().split() if word not in stoplist and not is_float(word)]
              for document in documents]
 
@@ -170,37 +190,42 @@ def doLDA(documents,query):
     hdp = HdpModel(corpus,dictionary)
 
     topic_answers = []
-    for x in range(len(documents)):
-        #print x, corpus[x]
-        entries = sorted(hdp[corpus[x]],key=lambda x: x[1],reverse=True)
+    for ii in range(len(documents)):
+        entries = sorted(hdp[corpus[ii]],key=lambda x: x[1],reverse=True)
         if entries:
-            d = hdp.show_topics(formatted=False)[entries[0][0]]
+            d = hdp.show_topics(-1,formatted=False)[entries[0][0]]
             ret = {"number":d[0],"scores":map(lambda x:{"value":x[0].replace("\"",""),"score":x[1]},d[1])}
             topic_answers.append(ret)
         else:
             topic_answers.append(None)
-    return topic_answers
+    return map(lambda x: " ".join(x),texts),topic_answers
 
 
-def getAddresses(text):
+def getAddresses(text,likes,unlikes):
     addresses = pyap.parse(text, country='US')
     addresses = map(lambda x: " ".join(str(x).upper().split()),addresses)
-    return map(lambda x: {"id":"address"+hashlib.md5(x).hexdigest(),"value":x},addresses)
+    return filter(lambda x: x["id"] not in unlikes, map(lambda x: {"id":"address"+hashlib.md5(x).hexdigest(),"value":x},addresses))
 
-def getRelationships(location):
-    out = "/Users/jgawrilow/j/butler_server/data/rel_"+location
+def getRelationships(texts,entities):
+    SPLIT_STRING = "\nJustin Gawrilow is great.\n"
+    text = SPLIT_STRING.join(texts)
+    file_name = hashlib.md5(text).hexdigest()
+    out = "/Users/jgawrilow/j/butler_server/data/" + file_name + ".txt"
+    myout = "/Users/jgawrilow/j/butler_server/data/my" + file_name + ".txt"
+    with codecs.open(out,"w",encoding="utf8") as fout:
+        fout.write(text)
     command = 'cd /Users/jgawrilow/Desktop/stanford-corenlp-full-2016-10-31; java -mx12g -cp "*" ' \
                'edu.stanford.nlp.naturalli.OpenIE {} -resolve_coref true -triple.strict true -format ollie > {}'. \
-        format("/Users/jgawrilow/j/butler_server/data/"+location, out)
+        format(out, myout)
 
 
     java_process = Popen(command, stdout=stderr, stderr=open(os.devnull, 'w'), shell=True)
     java_process.wait()
     assert not java_process.returncode, 'ERROR: Call to stanford_ie exited with a non-zero code status.'
 
-    with open(out, 'r') as output_file:
+    with open(myout, 'r') as output_file:
         results_str = output_file.readlines()
-    results = process_entity_relations(results_str)
+    results = process_entity_relations(results_str,entities)
     return results
 
 def get_tables(url,i):
@@ -250,9 +275,13 @@ def get_readability_text(html):
     return readable_article.strip()
 
 
-def get_urls(term,num_pages=1):
-    search_results = google.search(term, num_pages)
-    return [x.link for x in search_results]
+def get_urls(terms,num_pages=1):
+    results = []
+    for term in terms:
+        print "Searching for:" + term
+        search_results = google.search(term, num_pages)
+        results.extend([{"q":term,"url":x.link} for x in search_results])
+    return results
 
 def is_float(s):
     try:
@@ -291,7 +320,7 @@ def build_social_json(name, url,ptype):
     nes.index(index="butler", doc_type="pages",body=data,id=pid)
     return data
 
-def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images):
+def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images,other):
     pid = "page" + hashlib.md5(url).hexdigest()
     data = {
         "name":name,
@@ -305,7 +334,7 @@ def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images
             "addresses":addresses,
             "relationships":rels,
             "usernames":[],
-            "other":[],
+            "other":other,
             "images":images,
             "videos":[]
         },
@@ -337,7 +366,7 @@ def add_node(node, parent, urls ):
     if node.left: add_node( node.left, newNode, urls )
     if node.right: add_node( node.right, newNode, urls )
 
-def build_profile(entries):
+def build_profile(entries,likes,unlikes):
     main_profile = {
             "names":[],
             "emails":[],
@@ -354,13 +383,17 @@ def build_profile(entries):
     names_dict = {}
     email_dict = {}
     social_dict = {}
+    other_dict = {}
 
     for e in entries:
         if e["type"] == "social":
             social_dict[e["id"]] = social_dict.get(e["id"],[e["url"],0,e["profile"]["images"][0]["url"],e["profile"]["usernames"][0]["value"]])
             social_dict[e["id"]][1] += 1
             continue
-
+        for n in e["profile"]["other"]:
+            other_dict[n["id"]] = other_dict.get(n["id"],[n["value"],0,set()])
+            other_dict[n["id"]][1] += 1
+            other_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
         for n in e["profile"]["phone_numbers"]:
             phone_dict[n["id"]] = phone_dict.get(n["id"],[n["value"],0,set()])
             phone_dict[n["id"]][1] += 1
@@ -379,12 +412,13 @@ def build_profile(entries):
                 names_dict[n["id"]][1] += n["count"]
                 names_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
 
-    main_profile["phone_numbers"] = sorted([{"id":x,"value":phone_dict[x][0],"count":phone_dict[x][1],"from":list(map(json.loads,phone_dict[x][2]))} for x in phone_dict],key=lambda x: len(x["from"]),reverse=True)
-    main_profile["addresses"] = sorted([{"id":x,"value":address_dict[x][0],"count":address_dict[x][1],"from":list(map(json.loads,address_dict[x][2]))} for x in address_dict],key=lambda x: len(x["from"]),reverse=True)
-    main_profile["names"] = sorted([{"id":x,"value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict],key=lambda x: len(x["from"]),reverse=True)[:3]
-    main_profile["emails"] = sorted([{"id":x,"value":email_dict[x][0],"count":email_dict[x][1],"from":list(map(json.loads, email_dict[x][2]))} for x in email_dict],key=lambda x: len(x["from"]),reverse=True)
-    main_profile["relationships"] = sorted([{"id":x,"type":"connection","value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict],key=lambda x: len(x["from"]),reverse=True)[3:]
-    main_profile["social_media"] = sorted([{"id":x,"url":social_dict[x][0],"count":social_dict[x][1],"profile_url":social_dict[x][2],"username":social_dict[x][3]} for x in social_dict],key=lambda x: x["count"],reverse=True)
+    main_profile["other"] = sorted([{"id":x,"value":other_dict[x][0],"count":other_dict[x][1],"from":list(map(json.loads,other_dict[x][2]))} for x in other_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)
+    main_profile["phone_numbers"] = sorted([{"id":x,"value":phone_dict[x][0],"count":phone_dict[x][1],"from":list(map(json.loads,phone_dict[x][2]))} for x in phone_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)
+    main_profile["addresses"] = sorted([{"id":x,"value":address_dict[x][0],"count":address_dict[x][1],"from":list(map(json.loads,address_dict[x][2]))} for x in address_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)
+    main_profile["names"] = sorted([{"id":x,"value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)[:3]
+    main_profile["emails"] = sorted([{"id":x,"value":email_dict[x][0],"count":email_dict[x][1],"from":list(map(json.loads, email_dict[x][2]))} for x in email_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)
+    main_profile["relationships"] = sorted([{"id":x,"type":"connection","value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)[3:]
+    main_profile["social_media"] = sorted([{"id":x,"url":social_dict[x][0],"count":social_dict[x][1],"profile_url":social_dict[x][2],"username":social_dict[x][3]} for x in social_dict if x not in unlikes],key=lambda x: x["count"],reverse=True)
     
     return main_profile
 
@@ -405,34 +439,6 @@ def handle_unlike():
     print "GET: Like", name, uid
     nes.index(index="butler", doc_type="unlikes",body={"name":name,"time":datetime.now().isoformat(),"id":uid})
     return resp
-    '''
-    name = request.args.get("name")
-    sid = request.args.get("id")
-    if sid.startswith("phone"):
-        for phone in phone_dict:
-            if phone_dict[phone] == sid:
-                print "found match!!!"
-                dislike_phone_set.add(phone)
-                for page in page_dict:
-                    marks = []
-                    for i,p in enumerate(page_dict[page]["profile"]["phone_numbers"]):
-                        if sid == p["id"]:
-                            marks.append(i)
-                            break
-                    for mark in marks:
-                        del page_dict[page]["profile"]["phone_numbers"][mark]
-    elif sid.startswith("p"):
-        for page in page_dict:
-            if page_dict[page]["id"] == sid:
-                mark = page
-                break
-        del page_dict[mark]
-        del text_dict[mark]
-        dislike_page_set.add(mark)
-    
-    crunch()
-    return resp
-    '''
 
 # Called when something is liked
 @app.route('/like/', methods=['GET'])
@@ -441,18 +447,17 @@ def handle_like():
     lid = request.args.get("id")
     print "GET: Like", name, lid
     nes.index(index="butler", doc_type="likes",body={"name":name,"time":datetime.now().isoformat(),"id":lid})
-    '''
-    if sid.startswith("phone"):
-        for phone in phone_dict:
-            if phone_dict[phone] == sid:
-                new_search(phone)
-    '''
     return resp
 
 # Called when clear is clicked
 @app.route('/clear/', methods=['GET'])
 def handle_clear():
     name = request.args.get("name")
+    print "GET: Clear ->", name
+    qs = getQueries(name)
+    q, num_pages = qs[-1]
+    return_data = process_search([q],name,num_pages)
+    nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
     return resp
 
 @app.route('/get_searches/',methods=['GET'])
@@ -469,13 +474,7 @@ def handle_get_searches():
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
-# Called when reload is clicked
-@app.route('/reload/', methods=['GET'])
-def handle_reload():    
-
-    name = request.args.get("name")
-
-    print "GET: Reload", name
+def do_reload(name):
     query = {
     "query": {
         "term": {
@@ -487,177 +486,58 @@ def handle_reload():
     }
 
     results = nes.search(index="butler", doc_type="results", body=query)
-    print json.dumps(results)
-    if len(results["hits"]["hits"]) == 1:
-        resp = Response(json.dumps(results["hits"]["hits"][0]["_source"]["data"],indent=2))
+    return results
+
+# Called when reload is clicked
+@app.route('/reload/', methods=['GET'])
+def handle_reload():    
+    name = request.args.get("name")
+    print "GET: Reload", name
+    results = do_reload(name)
+    if len(results["hits"]["hits"]) >= 1:
+        resp = Response(json.dumps(results["hits"]["hits"][-1]["_source"]["data"],indent=2))
         resp.headers['Access-Control-Allow-Origin'] = '*'
         return resp
 
 # Called when save/export is clicked
 @app.route('/save_export/', methods=['GET'])
 def handle_save():
-    # Re-run everything here to get likes and dislikes, etc.
     name = request.args.get("name")
+    print "GET: Save/Export ->", name
+    #qs = getQueries(name)
+    #q, num_pages = qs[-1]
+    #return_data = process_search([q],name,num_pages)
+    #nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
     return resp
 
 @app.route('/crunch/',methods=['GET'])
 def handle_crunch():
-    #name = request.args.get("name")
-    #return crunch(name)
     name = request.args.get("name")
     print "GET: Crunch ->", name
     qs = getQueries(name)
     q, num_pages = qs[-1]
-    num_pages += 1
-    nes.index(index="butler", doc_type="queries",body={"name":name,"query":q,"time":datetime.now().isoformat(), "num_pages":num_pages})
-    return_data = process_search(q,name,num_pages)
+    likes,unlikes = getLikesUnlikes(name)
+    print likes
+    new_searches = []
+    results = do_reload(name)
+    if len(results["hits"]["hits"]) >= 1:
+        data = results["hits"]["hits"][-1]["_source"]["data"]
+        for p in data["profile"]["names"] + data["profile"]["phone_numbers"] + data["profile"]["emails"] \
+            + data["profile"]["addresses"] + data["profile"]["other"]:
+            if p["id"] in likes:
+                new_searches.append(p["value"])
+        for p in data["pages"]:
+            for e in p["entities"]:
+                if e["id"] in likes:
+                    new_searches.append(e["value"])
+
+    queries = [q] + new_searches
+    print queries
+    return_data = process_search(queries,name,num_pages)
     resp = Response(json.dumps(return_data,indent=2))
     nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
-
-def crunch(name):
-
-    qs = getQueries(name)
-    entries, texts, good_urls = [],[],[]
-    for p in page_dict:
-        entries.append(page_dict[p])
-        good_urls.append(p)
-        texts.append(text_dict[p])
-
-    tfidf_vectorizer = TfidfVectorizer(max_df=0.8, max_features=200000,
-                                 min_df=0.2, stop_words='english',
-                                 use_idf=True, tokenizer=tokenize_and_stem, ngram_range=(1,3))
-
-    tfidf_matrix = tfidf_vectorizer.fit_transform(texts) #fit the vectorizer to synopses
-    answers = doLDA(texts,q)
-
-    for i,a in enumerate(answers):
-        entries[i]["topic"] = a
-
-    dist = 1 - cosine_similarity(tfidf_matrix)
-
-    linkage_matrix = linkage(dist) #define the linkage_matrix using ward clustering pre-computed distances
-
-    tree = to_tree(linkage_matrix)
-
-    d3Dendro = dict(children=[], name="Top",count=len(good_urls))
-    add_node(tree, d3Dendro, good_urls)
-
-    updateAllNodes(d3Dendro["children"][0])
-
-    profile = build_profile(entries)
-
-    return_data = {"profile":profile,"pages":entries,"treemap":d3Dendro["children"][0]}
-
-    data_state = return_data
-
-    resp = Response(json.dumps(return_data,indent=2))
-    resp.headers['Access-Control-Allow-Origin'] = '*'
-    return resp
-
-def new_search(q,num_pages=1):
-    global data_state
-    print q
-    print num_pages, "pages"
-    urls = get_urls(q,num_pages)
-    texts = []
-    good_urls = []
-    entries = []
-
-    for url in page_dict:
-        entries.append(page_dict[url])
-        texts.append(text_dict[url])
-        good_urls.append(url)
-    for i,url in enumerate(urls):
-        print url
-        html = ""
-        text = ""
-        readable_text = ""
-        title = ""
-        entities = []
-        addresses = []
-        rels = []
-        emails  = []
-        phones = []
-        images = []
-        social = False
-
-        if url in page_dict:
-            entries.append(page_dict[url])
-            texts.append(text_dict[url])
-            continue
-
-        if url in dislike_page_set or url.endswith(".pdf") or any(map(url.startswith,stop)):
-            print "Skipping..."
-            continue
-
-        if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
-            print "Social"
-            data = build_social_json(name,url,"social")
-            social = True
-        else:
-            try:
-                html = get_html(url)
-                text,title = get_text_title(html)
-                readable_text = get_readability_text(html)
-                addresses = getAddresses(text)
-                entities = getEntities(text)
-                emails = get_emails(text)
-                phones = getPhoneNumbers(text)
-                #images = get_images(url)
-                #ss_text = get_screenshot_text(url,i)
-            except (UnicodeDecodeError,IOError,haul.exceptions.RetrieveError,Exception):
-                print "Error..."
-                continue
-            if text == None or text.strip() == "":
-                print "No Text..."
-                continue
-        texts.append(text)
-        text_dict[url] = text
-
-        #get_tables(url,i)
-        
-        good_urls.append(url)
-
-        if text != "":
-            pass
-            #rels = getRelationships(str(i)+".txt")
-        else:
-            rels = []
-        if not social:
-            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images)
-        entries.append(data)
-    tfidf_vectorizer = TfidfVectorizer(max_df=0.8, max_features=200000,
-                                 min_df=0.2, stop_words='english',
-                                 use_idf=True, tokenizer=tokenize_and_stem, ngram_range=(1,3))
-    tfidf_matrix = tfidf_vectorizer.fit_transform(texts) #fit the vectorizer to synopses
-    answers = doLDA(texts,q)
-
-    for i,a in enumerate(answers):
-        entries[i]["topic"] = a
-
-    dist = 1 - cosine_similarity(tfidf_matrix)
-
-    linkage_matrix = linkage(dist)
-
-    tree = to_tree(linkage_matrix)
-
-    d3Dendro = dict(children=[], name="Top",count=len(good_urls))
-    add_node(tree, d3Dendro, good_urls)
-
-    updateAllNodes(d3Dendro["children"][0])
-
-    profile = build_profile(entries)
-
-    return_data = {"profile":profile,"pages":entries,"treemap":d3Dendro["children"][0]}
-
-    data_state = return_data
-
-    resp = Response(json.dumps(return_data,indent=2))
-    resp.headers['Access-Control-Allow-Origin'] = '*'
-    return resp
-
 
 def getByURL(url, dtype, name):
     query = {
@@ -718,8 +598,7 @@ def handle_next():
     qs = getQueries(name)
     q, num_pages = qs[-1]
     num_pages += 1
-    nes.index(index="butler", doc_type="queries",body={"name":name,"query":q,"time":datetime.now().isoformat(), "num_pages":num_pages})
-    return_data = process_search(q,name,num_pages)
+    return_data = process_search([q],name,num_pages)
     resp = Response(json.dumps(return_data,indent=2))
     nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
@@ -733,10 +612,16 @@ def process_search(q,name,num_pages=1):
 
     likes, unlikes = getLikesUnlikes(name)
 
+    for query in q:
+        nes.index(index="butler", doc_type="queries",body={"name":name,"query":query,"time":datetime.now().isoformat(), "num_pages":num_pages})
+
     texts = []
     good_urls = []
     entries = []
-    for i,url in enumerate(urls):
+    all_entities = []
+    for i,url_obj in enumerate(urls):
+        url = url_obj["url"]
+        query = url_obj["q"]
         print url
         if url.endswith(".pdf") or any(map(url.startswith,stop)):
             print "Skipping..."
@@ -774,42 +659,44 @@ def process_search(q,name,num_pages=1):
                 html = get_html(url)
                 text,title = get_text_title(html)
                 readable_text = get_readability_text(html)
-                addresses = getAddresses(text)
-                entities = getEntities(text)
-                emails = get_emails(text)
-                phones = getPhoneNumbers(text)
+                addresses = getAddresses(text,likes,unlikes)
+                entities = getEntities(text,likes,unlikes)
+                emails = get_emails(text,likes,unlikes)
+                phones = getPhoneNumbers(text,likes,unlikes)
+                other = getOther(text,likes,unlikes)
+                all_entities.extend(entities)
                 #images = get_images(url)
                 #ss_text = get_screenshot_text(url,i)
-            except (UnicodeDecodeError,IOError,haul.exceptions.RetrieveError,Exception):
+            except (UnicodeDecodeError,IOError,haul.exceptions.RetrieveError):
                 print "Error..."
                 continue
             if text == None or text.strip() == "":
                 print "No Text..."
                 continue
         texts.append(text)
-        nes.index(index="butler", doc_type="texts",body={"name":name,"query":q,"time":datetime.now().isoformat(),
+        nes.index(index="butler", doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
             "url":url,"text":text})
 
         #get_tables(url,i)
         
         good_urls.append(url)
 
-        if text != "":
-            pass
-            #rels = getRelationships(str(i)+".txt")
-        else:
-            rels = []
         if not social:
-            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images)
+            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other)
         entries.append(data)
 
-    print texts
+    print "Processing Relationships", len(texts), len(entries)
+    all_rels = getRelationships(texts,all_entities)
+    print len(all_rels)
+    for i,rel in enumerate(all_rels):
+        entries[i]["other"] = rel
 
-    tfidf_vectorizer = TfidfVectorizer(max_df=0.8, max_features=200000,
-                                 min_df=0.2, stop_words='english',
-                                 use_idf=True, tokenizer=tokenize_and_stem, ngram_range=(1,3))
-    tfidf_matrix = tfidf_vectorizer.fit_transform(texts) #fit the vectorizer to synopses
-    answers = doLDA(texts,q)
+
+    tfidf_vectorizer = TfidfVectorizer(tokenizer=tokenize_and_stem)
+    
+    ldaTexts,answers = doLDA(texts,q)
+
+    tfidf_matrix = tfidf_vectorizer.fit_transform(ldaTexts) #fit the vectorizer to synopses
 
     for i,a in enumerate(answers):
         if a:
@@ -828,7 +715,7 @@ def process_search(q,name,num_pages=1):
 
     updateAllNodes(d3Dendro["children"][0])
 
-    profile = build_profile(entries)
+    profile = build_profile(entries,likes,unlikes)
 
     return_data = {"profile":profile,"pages":entries,"treemap":d3Dendro["children"][0]}
 
@@ -840,12 +727,9 @@ def handle_search():
     q = request.args.get("q")
     name = request.args.get("name")
     num_pages = int(request.args.get("n",1))
-
     print "GET: Search ->", name, q, num_pages
 
-    nes.index(index="butler", doc_type="queries",body={"name":name,"query":q,"time":datetime.now().isoformat(), "num_pages":1})
-
-    return_data = process_search(q,name,num_pages)
+    return_data = process_search([q],name,num_pages)
 
     resp = Response(json.dumps(return_data,indent=2))
     nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
