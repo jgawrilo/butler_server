@@ -32,10 +32,13 @@ import pickle
 import random
 from datetime import datetime
 
+
+
 from elasticsearch import Elasticsearch
 import hashlib
+from fuzzywuzzy import fuzz
 
-nes = Elasticsearch(["http://10.1.92.76:9200/"])
+nes = Elasticsearch(["http://localhost:9200/"])
 
 from scipy.cluster.hierarchy import ward, dendrogram,linkage, to_tree
 
@@ -54,6 +57,8 @@ sys.setdefaultencoding('utf8')
 stemmer = SnowballStemmer("english")
 
 nlp = spacy.load('en')
+
+total_count = 0
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'nitsuj'
@@ -119,7 +124,6 @@ def tokenize_and_stem(text):
     return stems
 
 def process_entity_relations(entity_relations_str,entities):
-
     entity_set = set()
     for e in entities:
         entity_set.add(e["value"])
@@ -137,17 +141,14 @@ def process_entity_relations(entity_relations_str,entities):
     return_list.append([{"id":"other"+hashlib.md5(" ".join([x[0],x[1],x[2]])).hexdigest(),"value":" ".join([x[0],x[1],x[2]])} for x in entity_relations])
     return return_list
 
-def getOther(text,likes,unlikes):
-    entity_relations = list()
-    relation = "Vlad is CEO of CSA"
-    pid = "other" + hashlib.md5(relation).hexdigest()
-    entity_relations.append({"id": pid, "value":relation})
-    return entity_relations
-
 def getEntities(text,likes,unlikes):
     ent_dict = {}
     for ent in nlp(unicode(text)).ents:
+        # normaalizing text
         ent_txt = ' '.join(ent.text.split()).upper().replace("\\n","").strip()
+        ent_txt = ent_txt.split("'S")[0]
+        ent_txt = ''.join([i for i in ent_txt if not i.isdigit()])
+
         ent_dict[(ent_txt,ent.label_)] = ent_dict.get((ent_txt,ent.label_),0)
         ent_dict[(ent_txt,ent.label_)] += 1
     return [{"value":x[0],"type":x[1],"count":ent_dict[x],"id":"entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest()} for x in ent_dict if x[1] not in 
@@ -162,7 +163,6 @@ def getPhoneNumbers(text,likes,unlikes):
             phones.append({"id":pid,"value":match})
     return phones
 
-
 def get_emails(text,likes,unlikes):
     ret = []
     for email in (email[0] for email in re.findall(regex, text) if not email[0].startswith('//')):
@@ -171,36 +171,47 @@ def get_emails(text,likes,unlikes):
             ret.append({"id":eid,"value":email})
     return ret
 
-def doLDA(documents,query):
+def doLDA(docu,level,last_count):
+    global total_count
+    total_count += 1
     # remove common words and tokenize
-    stoplist = set(stopwords.words('english')).union(set([x.lower() for x in " ".join(query).split()]))
+    slots, documents, urls = [],[],[]
+    for x in docu:
+        slots.append(x[1])
+        documents.append(x[0])
+        urls.append(x[2])
+
+    stoplist = set(stopwords.words('english'))
     texts = [[word for word in document.lower().split() if word not in stoplist and not is_float(word)]
              for document in documents]
 
-    # remove words that appear only once
-    frequency = defaultdict(int)
-    for text in texts:
-        for token in text:
-            frequency[token] += 1
-
-    texts = [[token for token in text if frequency[token] > 1]
-             for text in texts]
-
     dictionary = corpora.Dictionary(texts)
     corpus = [dictionary.doc2bow(text) for text in texts]
-    hdp = HdpModel(corpus,dictionary)
+    hdp = HdpModel(corpus,dictionary,random_state=7)
+    lda = hdp.suggested_lda_model()
 
-    topic_answers = []
-    for ii in range(len(documents)):
-        entries = sorted(hdp[corpus[ii]],key=lambda x: x[1],reverse=True)
+    topic_answers_dict = {"count":len(documents),"url":None,"level":level,"children":[],"node_id":total_count}
+    result_dict = {}
+    for i in range(len(documents)):
+        entries = sorted(lda[corpus[i]],key=lambda x: x[1],reverse=True)
         if entries:
-            d = hdp.show_topics(-1,formatted=False)[entries[0][0]]
-            ret = {"number":d[0],"scores":map(lambda x:{"value":x[0].replace("\"",""),"score":x[1]},d[1])}
-            topic_answers.append(ret)
+            d = lda.show_topics(-1,formatted=False)[entries[0][0]]
+            ret = {"text":documents[i],"url":urls[i],"row":i, "slot":slots[i], "number":d[0],"scores":map(lambda x:{"value":x[0].replace("\"",""),"score":x[1]},d[1])[:5]}
+            result_dict[d[0]] = result_dict.get(d[0],[])
+            result_dict[d[0]].append(ret)
         else:
-            topic_answers.append(None)
-    return map(lambda x: " ".join(x),texts),topic_answers
+            print "issue..."
+    for k in result_dict:
+        if len(docu) == last_count:
+            for res in result_dict[k]:
+                topic_answers_dict["children"].append({"count":1,"url":res["url"],"node_id":slots[res["row"]],"level":level+1,"children":[],"scores":res["scores"]})
+        elif len(result_dict[k]) > 1:
+            docs = [(x["text"],x["slot"],x["url"]) for x in result_dict[k]]
+            topic_answers_dict["children"].append(doLDA(docs,level+1,len(docu)))
+        else:
+            topic_answers_dict["children"].append({"count":1,"url":result_dict[k][0]["url"],"node_id":slots[result_dict[k][0]["row"]],"level":level+1,"children":[],"scores":result_dict[k][0]["scores"]})
 
+    return topic_answers_dict
 
 def getAddresses(text,likes,unlikes):
     addresses = pyap.parse(text, country='US')
@@ -367,7 +378,26 @@ def add_node(node, parent, urls ):
     if node.left: add_node( node.left, newNode, urls )
     if node.right: add_node( node.right, newNode, urls )
 
+def prune_entities(entries):
+    e_set = set()
+    for e in entries:
+        for n in e["entities"]:
+            if n["type"] == "PERSON":
+                # value, type, count, id
+                e_set.add((n["value"]))
+
+    for e in entries:
+        for n in e["entities"]:
+            if n["type"] == "PERSON":
+                print "Testing", n["value"]
+                for test in e_set:
+                    if test != n["value"] and fuzz.ratio(test, n["value"]) >= 64:
+                        print test, n["value"]
+
+
+
 def build_profile(entries,likes,unlikes):
+    #prune_entities(entries)
     main_profile = {
             "names":[],
             "emails":[],
@@ -437,7 +467,7 @@ def handle_name():
 def handle_unlike():
     name = request.args.get("name")
     uid = request.args.get("id")
-    print "GET: Like", name, uid
+    print "GET: Unlike", name, uid
     nes.index(index="butler", doc_type="unlikes",body={"name":name,"time":datetime.now().isoformat(),"id":uid})
     return resp
 
@@ -454,7 +484,7 @@ def handle_like():
 @app.route('/clear/', methods=['GET'])
 def handle_clear():
     name = request.args.get("name")
-    print "GET: Clear ->", name
+    print "GET: Clear", name
     qs = getQueries(name)
     q, num_pages = qs[-1]
     return_data = process_search([q],name,num_pages)
@@ -605,11 +635,23 @@ def handle_next():
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
+def populateEntries(entries,tree_stuff):
+    if "scores" in tree_stuff:
+        print json.dumps(tree_stuff,indent=2)
+        entries[tree_stuff["node_id"]]["topic"] = { \
+            "scores":tree_stuff["scores"],\
+            "number":"",\
+            "string":" ".join([x["value"] for x in tree_stuff["scores"]])\
+        }
+    else:
+        for child in tree_stuff["children"]:
+            populateEntries(entries,child) 
 
 
 def process_search(q,name,num_pages=1):
     # Google results...
     urls = get_urls(q,num_pages)
+    global total_count
 
     likes, unlikes = getLikesUnlikes(name)
 
@@ -664,7 +706,9 @@ def process_search(q,name,num_pages=1):
                 entities = getEntities(text,likes,unlikes)
                 emails = get_emails(text,likes,unlikes)
                 phones = getPhoneNumbers(text,likes,unlikes)
-                other = getOther(text,likes,unlikes)
+                if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
+                    print "Too many of something..."
+                    continue
                 all_entities.extend(entities)
                 #images = get_images(url)
                 #ss_text = get_screenshot_text(url,i)
@@ -683,43 +727,58 @@ def process_search(q,name,num_pages=1):
         good_urls.append(url)
 
         if not social:
-            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other)
+            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,[])
         entries.append(data)
 
-    print "Processing Relationships", len(texts), len(entries)
-    all_rels = getRelationships(texts,all_entities)
-    print len(all_rels)
-    print all_rels
-    for i,rel in enumerate(all_rels):
-        entries[i]["profile"]["other"] = rel
+    #print "Processing Relationships", len(texts), len(entries)
+    #all_rels = getRelationships(texts,all_entities)
+    #print len(all_rels)
+    #print all_rels
+    #for i,rel in enumerate(all_rels):
+    #    entries[i]["profile"]["other"] = rel
 
 
-    tfidf_vectorizer = TfidfVectorizer(tokenizer=tokenize_and_stem)
+    #tfidf_vectorizer = TfidfVectorizer(tokenizer=tokenize_and_stem)
+
+    doTexts = []
+    for i, text in enumerate(texts):
+        doTexts.append((text,i,good_urls[i]))
+
+    print "Pre pickle..."
+    pickle.dump( texts , open( "text.p", "wb" ) )
+    pickle.dump( good_urls , open( "urls.p", "wb" ) )
+    print "Pickled..."
+
+    total_count = len(doTexts)
+
+    tree_stuff = doLDA(doTexts,0,None)
+
+    populateEntries(entries,tree_stuff)
     
-    ldaTexts,answers = doLDA(texts,q)
+    #ldaTexts,answers = doLDA(texts,q)
 
-    tfidf_matrix = tfidf_vectorizer.fit_transform(ldaTexts) #fit the vectorizer to synopses
+    #tfidf_matrix = tfidf_vectorizer.fit_transform(ldaTexts) #fit the vectorizer to synopses
 
-    for i,a in enumerate(answers):
-        if a:
-            a["scores"] = a["scores"][:5]
-            a["string"] = ",".join(map(lambda x:x["value"], a["scores"]))
-        entries[i]["topic"] = a
+    #for i,a in enumerate(answers):
+    #    if a:
+    #        a["scores"] = a["scores"][:5]
+    #        a["string"] = ",".join(map(lambda x:x["value"], a["scores"]))
+    #    entries[i]["topic"] = a
 
-    dist = 1 - cosine_similarity(tfidf_matrix)
+    #dist = 1 - cosine_similarity(tfidf_matrix)
 
-    linkage_matrix = linkage(dist) #define the linkage_matrix using ward clustering pre-computed distances
+    #linkage_matrix = linkage(dist) #define the linkage_matrix using ward clustering pre-computed distances
 
-    tree = to_tree(linkage_matrix)
+    #tree = to_tree(linkage_matrix)
     #print tree
-    d3Dendro = dict(children=[], name="Top",count=len(good_urls))
-    add_node(tree, d3Dendro, good_urls)
+    #d3Dendro = dict(children=[], name="Top",count=len(good_urls))
+    #add_node(tree, d3Dendro, good_urls)
 
-    updateAllNodes(d3Dendro["children"][0])
+    #updateAllNodes(d3Dendro["children"][0])
 
     profile = build_profile(entries,likes,unlikes)
 
-    return_data = {"profile":profile,"pages":entries,"treemap":d3Dendro["children"][0]}
+    return_data = {"profile":profile,"pages":entries,"treemap":tree_stuff}
 
     return return_data
 
@@ -740,11 +799,9 @@ def handle_search():
 
 if __name__ == "__main__":
     app.debug=True
-    #context = ('server.crt', 'server.key')
-
     print "Running..."
     app.run(threaded=True,
         host="0.0.0.0",
-        port=(5000)) #ssl_context=context)
+        port=(5000))
     
 
