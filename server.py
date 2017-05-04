@@ -218,9 +218,29 @@ def getAddresses(text,likes,unlikes):
     addresses = map(lambda x: " ".join(str(x).upper().split()),addresses)
     return filter(lambda x: x["id"] not in unlikes, map(lambda x: {"id":"address"+hashlib.md5(x).hexdigest(),"value":x},addresses))
 
+def filterRels(texts,entities):
+    ent_set = set([x["value"] for x in entities])
+    new_texts = []
+    for text in texts:
+        new_text = []
+        sents = nltk.tokenize.sent_tokenize(text)
+        for sent in sents:
+            words = set(map(lambda x: x.upper(), nltk.tokenize.wordpunct_tokenize(sent)))
+            if len(ent_set.intersection(words)) > 3:
+                new_text.append(sent)
+        new_texts.append("\n".join(new_text))
+        #new_texts.append(" ".join([]))
+    return new_texts
+
+
+
+
 def getRelationships(texts,entities):
+    print "Filtering.."
+    new_texts = filterRels(texts,entities)
+    print "Done Filtering.."
     SPLIT_STRING = "\nJustin Gawrilow is great.\n"
-    text = SPLIT_STRING.join(texts)
+    text = SPLIT_STRING.join(new_texts)
     file_name = hashlib.md5(text).hexdigest()
     out = "/Users/jgawrilow/j/butler_server/data/" + file_name + ".txt"
     myout = "/Users/jgawrilow/j/butler_server/data/my" + file_name + ".txt"
@@ -230,11 +250,12 @@ def getRelationships(texts,entities):
                'edu.stanford.nlp.naturalli.OpenIE {} -resolve_coref true -triple.strict true -format ollie > {}'. \
         format(out, myout)
 
+    print "Running..."
 
     java_process = Popen(command, stdout=stderr, stderr=open(os.devnull, 'w'), shell=True)
     java_process.wait()
     assert not java_process.returncode, 'ERROR: Call to stanford_ie exited with a non-zero code status.'
-
+    print "Done running..."
     with open(myout, 'r') as output_file:
         results_str = output_file.readlines()
     results = process_entity_relations(results_str,entities)
@@ -690,11 +711,13 @@ def process_search(q,name,num_pages=1):
             entries.append(page)
             texts.append(getByURL(url,"texts",name)["text"])
             good_urls.append(url)
+            all_entities.extend(page["entities"])
             continue
 
         if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
             print "Social"
             data = build_social_json(name,url,"social")
+            all_entities.extend(data["entities"])
             social = True
 
         else:
@@ -730,12 +753,10 @@ def process_search(q,name,num_pages=1):
             data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,[])
         entries.append(data)
 
-    #print "Processing Relationships", len(texts), len(entries)
-    #all_rels = getRelationships(texts,all_entities)
-    #print len(all_rels)
-    #print all_rels
-    #for i,rel in enumerate(all_rels):
-    #    entries[i]["profile"]["other"] = rel
+    print "Processing Relationships", len(texts), len(entries)
+    all_rels = getRelationships(texts,all_entities)
+    for i,rel in enumerate(all_rels):
+        entries[i]["profile"]["other"] = rel
 
 
     #tfidf_vectorizer = TfidfVectorizer(tokenizer=tokenize_and_stem)
