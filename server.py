@@ -27,7 +27,6 @@ from collections import defaultdict
 from gensim.models.hdpmodel import HdpModel
 import haul
 from sklearn.metrics.pairwise import cosine_similarity
-import matplotlib.pyplot as plt
 import pickle
 import random
 from datetime import datetime
@@ -237,7 +236,8 @@ def filterRels(texts,entities):
 
 def getRelationships(texts,entities):
     print "Filtering.."
-    new_texts = filterRels(texts,entities)
+    #new_texts = filterRels(texts,entities)
+    new_texts = texts
     print "Done Filtering.."
     SPLIT_STRING = "\nJustin Gawrilow is great.\n"
     text = SPLIT_STRING.join(new_texts)
@@ -307,6 +307,66 @@ def get_readability_text(html):
     readable_title = Document(html).short_title()
     return readable_article.strip()
 
+
+def doNLP(text,likes,unlikes):
+    print "doNLP"
+    url = 'http://localhost:9000/?properties={"annotators": "tokenize,ssplit,pos,ner,depparse,openie", "date": "2017-05-04T15:03:54"},"pipelineLanguage":"en""}'
+    resp = requests.post(url,data=text)
+    print "done."
+    data = json.loads(resp.text)
+    entities = []
+
+    return_rels = []
+
+    for sentence in data["sentences"]:
+        last_ent = None
+        for token in sentence["tokens"]:
+            ner_type = token["ner"]
+            if ner_type not in  ["O","NUMBER","DURATION","DATE"]:
+                entities.append((ner_type,token["word"],token["index"]))
+        for rel in sentence["openie"]:
+            return_rels.append({"id":"other"+hashlib.md5(" ".join([rel["subject"],rel["relation"],rel["object"]])).hexdigest(),"value":" ".join([rel["subject"],rel["relation"],rel["object"]])})
+    print "done1"
+    ent_list = []
+    last_type = None
+    last_index = 1
+    for ent in entities:
+        if last_type == ent[0] and last_index == ent[2]-1:
+            ent_list[-1] = (" ".join([ent_list[-1][0],ent[1]]),ent[0])
+        else:
+            ent_list.append((ent[1],ent[0]))
+        last_type = ent[0]
+        last_index = ent[2]
+    print "done2"
+    ent_dict = {}
+    entity_set = set()
+    for ent in ent_list:
+        # normaalizing text
+        ent_txt = ent[0]
+        label = ent[1]
+        ent_txt = ' '.join(ent_txt.split()).upper().replace("\\n","").strip()
+        ent_txt = ent_txt.split("'S")[0]
+        ent_txt = ''.join([i for i in ent_txt if not i.isdigit()])
+
+        ent_dict[(ent_txt,label)] = ent_dict.get((ent_txt,label),0)
+        ent_dict[(ent_txt,label)] += 1
+        entity_set.add(ent_txt)
+    print "done3"
+
+    best_return_rels = []
+    for rel in return_rels:
+        add = False
+        for e in entity_set:
+            if e in rel["value"].upper():
+                add = True
+                break
+        if add:
+            best_return_rels.append(rel)
+
+    return_ents = [{"value":x[0],"type":x[1],"count":ent_dict[x],"id":"entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest()} for x in ent_dict \
+    if "entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest() not in unlikes]
+
+    return return_ents, best_return_rels
 
 def get_urls(terms,num_pages=1):
     results = []
@@ -726,7 +786,8 @@ def process_search(q,name,num_pages=1):
                 text,title = get_text_title(html)
                 readable_text = get_readability_text(html)
                 addresses = getAddresses(text,likes,unlikes)
-                entities = getEntities(text,likes,unlikes)
+                entities,other = doNLP(text,likes,unlikes)
+                print 'full done'
                 emails = get_emails(text,likes,unlikes)
                 phones = getPhoneNumbers(text,likes,unlikes)
                 if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
@@ -750,25 +811,12 @@ def process_search(q,name,num_pages=1):
         good_urls.append(url)
 
         if not social:
-            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,[])
+            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other)
         entries.append(data)
-
-    print "Processing Relationships", len(texts), len(entries)
-    all_rels = getRelationships(texts,all_entities)
-    for i,rel in enumerate(all_rels):
-        entries[i]["profile"]["other"] = rel
-
-
-    #tfidf_vectorizer = TfidfVectorizer(tokenizer=tokenize_and_stem)
 
     doTexts = []
     for i, text in enumerate(texts):
         doTexts.append((text,i,good_urls[i]))
-
-    print "Pre pickle..."
-    pickle.dump( texts , open( "text.p", "wb" ) )
-    pickle.dump( good_urls , open( "urls.p", "wb" ) )
-    print "Pickled..."
 
     total_count = len(doTexts)
 
@@ -819,10 +867,8 @@ def handle_search():
     return resp
 
 if __name__ == "__main__":
-    app.debug=True
+    app.debug = True
     print "Running..."
-    app.run(threaded=True,
-        host="0.0.0.0",
-        port=(5000))
+    app.run(host="0.0.0.0",port=5000)
     
 
