@@ -37,7 +37,9 @@ from elasticsearch import Elasticsearch
 import hashlib
 from fuzzywuzzy import fuzz
 
-nes = Elasticsearch(["http://localhost:9200/"])
+config = json.load(open("config.json"))
+
+nes = Elasticsearch([config["es"]])
 
 from scipy.cluster.hierarchy import ward, dendrogram,linkage, to_tree
 
@@ -60,7 +62,7 @@ nlp = spacy.load('en')
 total_count = 0
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'nitsuj'
+app.config['SECRET_KEY'] = 'kyc_butler'
 
 resp = Response(json.dumps({"success":True}))
 resp.headers['Access-Control-Allow-Origin'] = '*'
@@ -68,6 +70,8 @@ resp.headers['Access-Control-Allow-Origin'] = '*'
 regex = re.compile(("([a-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+\/=?^_`"
                     "{|}~-]+)*(@|\sat\s)(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(\.|"
                     "\sdot\s))+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)"))
+
+
 
 # Social Sites
 social_mappings = [
@@ -232,35 +236,6 @@ def filterRels(texts,entities):
     return new_texts
 
 
-
-
-def getRelationships(texts,entities):
-    print "Filtering.."
-    #new_texts = filterRels(texts,entities)
-    new_texts = texts
-    print "Done Filtering.."
-    SPLIT_STRING = "\nJustin Gawrilow is great.\n"
-    text = SPLIT_STRING.join(new_texts)
-    file_name = hashlib.md5(text).hexdigest()
-    out = "/Users/jgawrilow/j/butler_server/data/" + file_name + ".txt"
-    myout = "/Users/jgawrilow/j/butler_server/data/my" + file_name + ".txt"
-    with codecs.open(out,"w",encoding="utf8") as fout:
-        fout.write(text)
-    command = 'cd /Users/jgawrilow/Desktop/stanford-corenlp-full-2016-10-31; java -mx12g -cp "*" ' \
-               'edu.stanford.nlp.naturalli.OpenIE {} -resolve_coref true -triple.strict true -format ollie > {}'. \
-        format(out, myout)
-
-    print "Running..."
-
-    java_process = Popen(command, stdout=stderr, stderr=open(os.devnull, 'w'), shell=True)
-    java_process.wait()
-    assert not java_process.returncode, 'ERROR: Call to stanford_ie exited with a non-zero code status.'
-    print "Done running..."
-    with open(myout, 'r') as output_file:
-        results_str = output_file.readlines()
-    results = process_entity_relations(results_str,entities)
-    return results
-
 def get_tables(url,i):
     tp = HTMLTableParser()
     tables = tp.parse_url(url)
@@ -310,62 +285,65 @@ def get_readability_text(html):
 
 def doNLP(text,likes,unlikes):
     print "doNLP"
-    url = 'http://localhost:9000/?properties={"annotators": "tokenize,ssplit,pos,ner,depparse,openie", "date": "2017-05-04T15:03:54"},"pipelineLanguage":"en""}'
-    resp = requests.post(url,data=text)
-    print "done."
-    data = json.loads(resp.text)
-    entities = []
+    url = config["nlp_service"] + '/?properties={"annotators": "tokenize,ssplit,pos,ner,depparse,openie", "date": "2017-05-04T15:03:54"},"pipelineLanguage":"en""}'
+    return_ents, best_return_rels = [],[]
+    try:
+        resp = requests.post(url,data=text)
+        print "done."
+        data = json.loads(resp.text)
+        entities = []
 
-    return_rels = []
+        return_rels = []
 
-    for sentence in data["sentences"]:
-        last_ent = None
-        for token in sentence["tokens"]:
-            ner_type = token["ner"]
-            if ner_type not in  ["O","NUMBER","DURATION","DATE"]:
-                entities.append((ner_type,token["word"],token["index"]))
-        for rel in sentence["openie"]:
-            return_rels.append({"id":"other"+hashlib.md5(" ".join([rel["subject"],rel["relation"],rel["object"]])).hexdigest(),"value":" ".join([rel["subject"],rel["relation"],rel["object"]])})
-    print "done1"
-    ent_list = []
-    last_type = None
-    last_index = 1
-    for ent in entities:
-        if last_type == ent[0] and last_index == ent[2]-1:
-            ent_list[-1] = (" ".join([ent_list[-1][0],ent[1]]),ent[0])
-        else:
-            ent_list.append((ent[1],ent[0]))
-        last_type = ent[0]
-        last_index = ent[2]
-    print "done2"
-    ent_dict = {}
-    entity_set = set()
-    for ent in ent_list:
-        # normaalizing text
-        ent_txt = ent[0]
-        label = ent[1]
-        ent_txt = ' '.join(ent_txt.split()).upper().replace("\\n","").strip()
-        ent_txt = ent_txt.split("'S")[0]
-        ent_txt = ''.join([i for i in ent_txt if not i.isdigit()])
+        for sentence in data["sentences"]:
+            last_ent = None
+            for token in sentence["tokens"]:
+                ner_type = token["ner"]
+                if ner_type not in  ["O","NUMBER","DURATION","DATE","MONEY","ORDINAL","PERCENT","TIME"]:
+                    entities.append((ner_type,token["word"],token["index"]))
+            for rel in sentence["openie"]:
+                return_rels.append({"id":"other"+hashlib.md5(" ".join([rel["subject"],rel["relation"],rel["object"]])).hexdigest(),"value":" ".join([rel["subject"],rel["relation"],rel["object"]])})
+        print "done1"
+        ent_list = []
+        last_type = None
+        last_index = 1
+        for ent in entities:
+            if last_type == ent[0] and last_index == ent[2]-1:
+                ent_list[-1] = (" ".join([ent_list[-1][0],ent[1]]),ent[0])
+            else:
+                ent_list.append((ent[1],ent[0]))
+            last_type = ent[0]
+            last_index = ent[2]
+        print "done2"
+        ent_dict = {}
+        entity_set = set()
+        for ent in ent_list:
+            # normaalizing text
+            ent_txt = ent[0]
+            label = ent[1]
+            ent_txt = ' '.join(ent_txt.split()).upper().replace("\\n","").strip()
+            ent_txt = ent_txt.split("'S")[0]
+            ent_txt = ''.join([i for i in ent_txt if not i.isdigit()])
 
-        ent_dict[(ent_txt,label)] = ent_dict.get((ent_txt,label),0)
-        ent_dict[(ent_txt,label)] += 1
-        entity_set.add(ent_txt)
-    print "done3"
+            ent_dict[(ent_txt,label)] = ent_dict.get((ent_txt,label),0)
+            ent_dict[(ent_txt,label)] += 1
+            entity_set.add(ent_txt)
+        print "done3"
 
-    best_return_rels = []
-    for rel in return_rels:
-        add = False
-        for e in entity_set:
-            if e in rel["value"].upper():
-                add = True
-                break
-        if add:
-            best_return_rels.append(rel)
+        best_return_rels = []
+        for rel in return_rels:
+            add = False
+            for e in entity_set:
+                if e in rel["value"].upper():
+                    add = True
+                    break
+            if add:
+                best_return_rels.append(rel)
 
-    return_ents = [{"value":x[0],"type":x[1],"count":ent_dict[x],"id":"entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest()} for x in ent_dict \
-    if "entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest() not in unlikes]
-
+        return_ents = [{"value":x[0],"type":x[1],"count":ent_dict[x],"id":"entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest()} for x in ent_dict \
+        if "entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest() not in unlikes]
+    except:
+        print "Error"
     return return_ents, best_return_rels
 
 def get_urls(terms,num_pages=1):
@@ -566,10 +544,10 @@ def handle_like():
 def handle_clear():
     name = request.args.get("name")
     print "GET: Clear", name
-    qs = getQueries(name)
-    q, num_pages = qs[-1]
-    return_data = process_search([q],name,num_pages)
-    nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    #qs = getQueries(name)
+    #q, num_pages = qs[-1]
+    #return_data = process_search([q],name,num_pages)
+    #nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
     return resp
 
 @app.route('/get_searches/',methods=['GET'])
@@ -753,6 +731,7 @@ def process_search(q,name,num_pages=1):
 
         html = ""
         text = ""
+        all_text = ""
         readable_text = ""
         title = ""
         entities = []
@@ -783,13 +762,14 @@ def process_search(q,name,num_pages=1):
         else:
             try:
                 html = get_html(url)
-                text,title = get_text_title(html)
-                readable_text = get_readability_text(html)
-                addresses = getAddresses(text,likes,unlikes)
+                all_text,title = get_text_title(html)
+                text = get_readability_text(html)
+                text,title = get_text_title(text)
+                addresses = getAddresses(all_text,likes,unlikes)
                 entities,other = doNLP(text,likes,unlikes)
                 print 'full done'
-                emails = get_emails(text,likes,unlikes)
-                phones = getPhoneNumbers(text,likes,unlikes)
+                emails = get_emails(all_text,likes,unlikes)
+                phones = getPhoneNumbers(all_text,likes,unlikes)
                 if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
                     print "Too many of something..."
                     continue
@@ -802,9 +782,9 @@ def process_search(q,name,num_pages=1):
             if text == None or text.strip() == "":
                 print "No Text..."
                 continue
-        texts.append(text)
+        texts.append(all_text)
         nes.index(index="butler", doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
-            "url":url,"text":text})
+            "url":url,"text":all_text,"main_text":text})
 
         #get_tables(url,i)
         
@@ -869,6 +849,6 @@ def handle_search():
 if __name__ == "__main__":
     app.debug = True
     print "Running..."
-    app.run(host="0.0.0.0",port=5000)
+    app.run(host="0.0.0.0",port=config["port"])
     
 
