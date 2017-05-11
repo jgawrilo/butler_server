@@ -250,7 +250,7 @@ def get_html(url):
     "Connection" : "close",  # another way to cover tracks
     "User-Agent" : ua
     }
-    response = requests.get(url,headers=headers)
+    response = requests.get(url,headers=headers,timeout=5)
     html = response.content.encode("utf-8","ignore")
     return html
 
@@ -376,9 +376,7 @@ def build_social_json(name, url,ptype):
             "phone_numbers":[],
             "addresses":[],
             "relationships":[],
-            "usernames":[{
-            "value":"Unknown"
-            }],
+            "social_media":[],
             "other":[],
             "images":[{
             "url":"http://simpleicon.com/wp-content/uploads/user1.png"
@@ -404,7 +402,7 @@ def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images
             "phone_numbers":phones,
             "addresses":addresses,
             "relationships":rels,
-            "usernames":[],
+            "social_media":[],
             "other":other,
             "images":images,
             "videos":[]
@@ -477,7 +475,7 @@ def build_profile(entries,likes,unlikes):
 
     for e in entries:
         if e["type"] == "social":
-            social_dict[e["id"]] = social_dict.get(e["id"],[e["url"],0,e["profile"]["images"][0]["url"],e["profile"]["usernames"][0]["value"]])
+            social_dict[e["id"]] = social_dict.get(e["id"],[e["url"],0,e["profile"]["images"][0]["url"],e["profile"]["names"][0]["value"]])
             social_dict[e["id"]][1] += 1
             continue
         for n in e["profile"]["other"]:
