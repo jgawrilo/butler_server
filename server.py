@@ -1,63 +1,34 @@
 # -*- coding: utf-8 -*-
 
-#from google import search
 import requests
-import codecs
 from bs4 import BeautifulSoup
 import re
 import nltk
 import sys
-from sklearn.feature_extraction.text import TfidfVectorizer
-# load nltk's SnowballStemmer as variabled 'stemmer'
 from nltk.stem.snowball import SnowballStemmer
-import glob, os
 from readability.readability import Document
 from selenium import webdriver
-import spacy
 import pyap
 import json
 from table import HTMLTableParser
-from subprocess import Popen
-from sys import stderr
 from nltk.corpus import stopwords
-
-from flask import Flask, request, Response, session, escape
+from flask import Flask, request, Response
 from gensim import corpora
-from collections import defaultdict
 from gensim.models.hdpmodel import HdpModel
 import haul
-from sklearn.metrics.pairwise import cosine_similarity
-import pickle
 import random
 from datetime import datetime
-
-
-
 from elasticsearch import Elasticsearch
 import hashlib
 from fuzzywuzzy import fuzz
-
-config = json.load(open("config.json"))
-
-nes = Elasticsearch([config["es"]])
-
-from scipy.cluster.hierarchy import ward, dendrogram,linkage, to_tree
-
-try:
-    import Image
-except ImportError:
-    from PIL import Image
-
-import pytesseract
-
 from google import google
 
 reload(sys)  
 sys.setdefaultencoding('utf8')
 
+config = json.load(open("config.json"))
+nes = Elasticsearch([config["es"]])
 stemmer = SnowballStemmer("english")
-
-nlp = spacy.load('en')
 
 total_count = 0
 
@@ -143,19 +114,6 @@ def process_entity_relations(entity_relations_str,entities):
             entity_relations.append(s[s.find("(") + 1:s.find(")")].split(';'))
     return_list.append([{"id":"other"+hashlib.md5(" ".join([x[0],x[1],x[2]])).hexdigest(),"value":" ".join([x[0],x[1],x[2]])} for x in entity_relations])
     return return_list
-
-def getEntities(text,likes,unlikes):
-    ent_dict = {}
-    for ent in nlp(unicode(text)).ents:
-        # normaalizing text
-        ent_txt = ' '.join(ent.text.split()).upper().replace("\\n","").strip()
-        ent_txt = ent_txt.split("'S")[0]
-        ent_txt = ''.join([i for i in ent_txt if not i.isdigit()])
-
-        ent_dict[(ent_txt,ent.label_)] = ent_dict.get((ent_txt,ent.label_),0)
-        ent_dict[(ent_txt,ent.label_)] += 1
-    return [{"value":x[0],"type":x[1],"count":ent_dict[x],"id":"entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest()} for x in ent_dict if x[1] not in 
-    ["CARDINAL","DATE","MONEY","PERCENT","TIME","WORK_OF_ART"] and "entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest() not in unlikes]
 
 def getPhoneNumbers(text,likes,unlikes):
     phones = []
@@ -257,14 +215,6 @@ def get_html(url):
 def get_images(url):
     result = haul.find_images(url)
     return map(lambda x: url + x if x.startswith("/") else x,result.image_urls)
-
-def get_screenshot_text(url,i):
-    br = webdriver.PhantomJS()
-    br.get(url)
-    br.save_screenshot("data/" + str(i) + ".png")
-    br.quit
-
-    return pytesseract.image_to_string(Image.open("data/" + str(i) + ".png"))
 
 def get_text_title(html):
     soup = BeautifulSoup(html, "lxml")
@@ -773,7 +723,6 @@ def process_search(q,name,num_pages=1):
                     continue
                 all_entities.extend(entities)
                 #images = get_images(url)
-                #ss_text = get_screenshot_text(url,i)
             except (UnicodeDecodeError,IOError,haul.exceptions.RetrieveError):
                 print "Error..."
                 continue
@@ -801,27 +750,6 @@ def process_search(q,name,num_pages=1):
     tree_stuff = doLDA(doTexts,0,None)
 
     populateEntries(entries,tree_stuff)
-    
-    #ldaTexts,answers = doLDA(texts,q)
-
-    #tfidf_matrix = tfidf_vectorizer.fit_transform(ldaTexts) #fit the vectorizer to synopses
-
-    #for i,a in enumerate(answers):
-    #    if a:
-    #        a["scores"] = a["scores"][:5]
-    #        a["string"] = ",".join(map(lambda x:x["value"], a["scores"]))
-    #    entries[i]["topic"] = a
-
-    #dist = 1 - cosine_similarity(tfidf_matrix)
-
-    #linkage_matrix = linkage(dist) #define the linkage_matrix using ward clustering pre-computed distances
-
-    #tree = to_tree(linkage_matrix)
-    #print tree
-    #d3Dendro = dict(children=[], name="Top",count=len(good_urls))
-    #add_node(tree, d3Dendro, good_urls)
-
-    #updateAllNodes(d3Dendro["children"][0])
 
     profile = build_profile(entries,likes,unlikes)
 
