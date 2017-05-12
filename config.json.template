@@ -1,0 +1,5 @@
+{
+    "es":"http://localhost:9200/",
+    "nlp_service":"http://localhost:9000",
+    "port":5000
+}
