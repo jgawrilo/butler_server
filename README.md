@@ -1,7 +1,7 @@
 # butler_server
 
 ## Service Dependencies
-This project depends on an [Elasticsearch](https://www.elastic.co/guide/en/elasticsearch/reference/current/_installation.html) instance as well as a [CoreNLP Server](https://stanfordnlp.github.io/CoreNLP/corenlp-server.html).  Please follow the links if you plan to install and use locally.
+This project depends on an [Elasticsearch](https://www.elastic.co/guide/en/elasticsearch/reference/current/_installation.html) instance as well as a [CoreNLP Server](https://stanfordnlp.github.io/CoreNLP/corenlp-server.html).  Please follow the links if you plan to install and use locally. Otherwise you'll need to ensure these endpoints are properly configured in the config.json file.
 
 Here is the command to run the CoreNLP Server locally.
 
