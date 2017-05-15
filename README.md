@@ -10,6 +10,8 @@ You'll need to change config.json settings to point to your Elasticsearch instan
 
 `pip install -r requirements.txt`
 
+`./nltk.sh`
+
 ## Setting up Elasticsearch Index
 `python utils.py create` - creates buter lindex
 
@@ -18,4 +20,5 @@ You'll need to change config.json settings to point to your Elasticsearch instan
 
 ## Utility Scripts
 `python utils.py delete` - deletes buter lindex
+
 `python utils.py reset` - recreates buter lindex
