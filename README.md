@@ -20,4 +20,5 @@ You'll need to change config.json settings to point to your Elasticsearch instan
 
 ## Utility Scripts
 `python utils.py delete` - deletes buter lindex
+
 `python utils.py reset` - recreates buter lindex
