@@ -9,6 +9,7 @@ This project depends on an [Elasticsearch](https://www.elastic.co/guide/en/elast
 You'll need to change config.json settings to point to your Elasticsearch instance, the port you'd like to serve the butler server on, and your CoreNLP service endpoing.
 
 `pip install -r requirements.txt`
+`./nltk.sh`
 
 ## Setting up Elasticsearch Index
 `python utils.py create` - creates buter lindex
