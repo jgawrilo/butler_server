@@ -597,6 +597,9 @@ def getByURL(url, dtype, name):
 
 def getQueries(name):
     query = {
+    "sort" : [
+        { "time" : {"order" : "asc"}},
+    ],
     "query": {
         "term": {
            "name": {
@@ -629,12 +632,28 @@ def getLikesUnlikes(name):
 
 
 # Called when twitter is scraped...
+@app.route('/previous/', methods=['GET'])
+def handle_previous():
+    name = request.args.get("name")
+    print "GET: Previous ->", name
+    qs = getQueries(name)
+    q, num_pages = qs[-1]
+    print q, num_pages
+    num_pages -= 1
+    return_data = process_search([q],name,num_pages)
+    resp = Response(json.dumps(return_data,indent=2))
+    nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
+
+# Called when twitter is scraped...
 @app.route('/next/', methods=['GET'])
 def handle_next():
     name = request.args.get("name")
     print "GET: Next ->", name
     qs = getQueries(name)
     q, num_pages = qs[-1]
+    print q, num_pages
     num_pages += 1
     return_data = process_search([q],name,num_pages)
     resp = Response(json.dumps(return_data,indent=2))
@@ -696,10 +715,15 @@ def process_search(q,name,num_pages=1):
             page = getByURL(url,"pages",name)
 
             if page:
+                print "Page already mined."
                 if page["id"] in unlikes:
+                    print "Page unliked."
                     continue
                 entries.append(page)
-                texts.append(getByURL(url,"texts",name)["text"])
+                text = getByURL(url,"texts",name)["text"]
+                if text.strip() != "":
+                    has_text_results = True
+                texts.append(text)
                 good_urls.append(url)
                 all_entities.extend(page["entities"])
                 continue
