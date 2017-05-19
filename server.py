@@ -657,89 +657,95 @@ def populateEntries(entries,tree_stuff):
 
 def process_search(q,name,num_pages=1):
     # Google results...
-    urls = get_urls(q,num_pages)
-    global total_count
+    has_text_results = False
+    while not has_text_results:
+        print "Getting %d more pages" % num_pages
+        urls = get_urls(q,num_pages)
+        global total_count
 
-    likes, unlikes = getLikesUnlikes(name)
+        likes, unlikes = getLikesUnlikes(name)
 
-    for query in q:
-        nes.index(index="butler", doc_type="queries",body={"name":name,"query":query,"time":datetime.now().isoformat(), "num_pages":num_pages})
+        for query in q:
+            nes.index(index="butler", doc_type="queries",body={"name":name,"query":query,"time":datetime.now().isoformat(), "num_pages":num_pages})
 
-    texts = []
-    good_urls = []
-    entries = []
-    all_entities = []
-    for i,url_obj in enumerate(urls):
-        url = url_obj["url"]
-        query = url_obj["q"]
-        print url
-        if url.endswith(".pdf") or any(map(url.startswith,stop)):
-            print "Skipping..."
-            continue
-
-        html = ""
-        text = ""
-        all_text = ""
-        readable_text = ""
-        title = ""
-        entities = []
-        addresses = []
-        rels = []
-        emails  = []
-        phones = []
-        images = []
-        social = False
-
-        page = getByURL(url,"pages",name)
-
-        if page:
-            if page["id"] in unlikes:
+        texts = []
+        good_urls = []
+        entries = []
+        all_entities = []
+        for i,url_obj in enumerate(urls):
+            url = url_obj["url"]
+            query = url_obj["q"]
+            print url
+            if url.endswith(".pdf") or any(map(url.startswith,stop)):
+                print "Skipping..."
                 continue
-            entries.append(page)
-            texts.append(getByURL(url,"texts",name)["text"])
-            good_urls.append(url)
-            all_entities.extend(page["entities"])
-            continue
 
-        if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
-            print "Social"
-            data = build_social_json(name,url,"social")
-            all_entities.extend(data["entities"])
-            social = True
+            html = ""
+            text = ""
+            all_text = ""
+            readable_text = ""
+            title = ""
+            entities = []
+            addresses = []
+            rels = []
+            emails  = []
+            phones = []
+            images = []
+            social = False
 
-        else:
-            try:
-                html = get_html(url)
-                all_text,title = get_text_title(html)
-                text = get_readability_text(html)
-                text,title = get_text_title(text)
-                addresses = getAddresses(all_text,likes,unlikes)
-                entities,other = doNLP(text,likes,unlikes)
-                print 'full done'
-                emails = get_emails(all_text,likes,unlikes)
-                phones = getPhoneNumbers(all_text,likes,unlikes)
-                if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
-                    print "Too many of something..."
+            page = getByURL(url,"pages",name)
+
+            if page:
+                if page["id"] in unlikes:
                     continue
-                all_entities.extend(entities)
-                #images = get_images(url)
-            except (UnicodeDecodeError,IOError,haul.exceptions.RetrieveError):
-                print "Error..."
+                entries.append(page)
+                texts.append(getByURL(url,"texts",name)["text"])
+                good_urls.append(url)
+                all_entities.extend(page["entities"])
                 continue
-            if text == None or text.strip() == "":
-                print "No Text..."
-                continue
-        texts.append(all_text)
-        nes.index(index="butler", doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
-            "url":url,"text":all_text,"main_text":text})
 
-        #get_tables(url,i)
-        
-        good_urls.append(url)
+            if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
+                print "Social"
+                data = build_social_json(name,url,"social")
+                all_entities.extend(data["entities"])
+                social = True
 
-        if not social:
-            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other)
-        entries.append(data)
+            else:
+                try:
+                    html = get_html(url)
+                    all_text,title = get_text_title(html)
+                    text = get_readability_text(html)
+                    text,title = get_text_title(text)
+                    addresses = getAddresses(all_text,likes,unlikes)
+                    entities,other = doNLP(text,likes,unlikes)
+                    print 'full done'
+                    emails = get_emails(all_text,likes,unlikes)
+                    phones = getPhoneNumbers(all_text,likes,unlikes)
+                    if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
+                        print "Too many of something..."
+                        continue
+                    all_entities.extend(entities)
+                    #images = get_images(url)
+                except (UnicodeDecodeError,IOError,haul.exceptions.RetrieveError):
+                    print "Error..."
+                    continue
+                if text == None or text.strip() == "":
+                    print "No Text..."
+                    continue
+            texts.append(all_text)
+            if all_text.strip() != "":
+                has_text_results = True
+            nes.index(index="butler", doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
+                "url":url,"text":all_text,"main_text":text})
+
+            #get_tables(url,i)
+            
+            good_urls.append(url)
+
+            if not social:
+                data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other)
+            entries.append(data)
+        num_pages += 1
 
     doTexts = []
     for i, text in enumerate(texts):
