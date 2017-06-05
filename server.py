@@ -421,7 +421,7 @@ def build_profile(entries,likes,unlikes):
 
     for e in entries:
         if e["type"] == "social":
-            social_dict[e["id"]] = social_dict.get(e["id"],[e["url"],0,e["profile"]["images"][0]["url"],e["profile"]["names"][0]["value"]])
+            social_dict[e["id"]] = social_dict.get(e["id"],[e["url"],0,None,None])
             social_dict[e["id"]][1] += 1
             continue
         for n in e["profile"]["other"]:
