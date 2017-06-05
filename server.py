@@ -319,18 +319,14 @@ def build_social_json(name, url,ptype):
         "id":pid,
         "title":None,
         "profile":{
-            "names":[{
-            "value":"Unknown"
-            }],
+            "names":[],
             "emails":[],
             "phone_numbers":[],
             "addresses":[],
             "relationships":[],
             "social_media":[],
             "other":[],
-            "images":[{
-            "url":"http://simpleicon.com/wp-content/uploads/user1.png"
-            }],
+            "images":[],
             "videos":[]
         },
         "entities":[],
@@ -450,13 +446,13 @@ def build_profile(entries,likes,unlikes):
                 names_dict[n["id"]][1] += n["count"]
                 names_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
 
-    main_profile["other"] = sorted([{"id":x,"value":other_dict[x][0],"count":other_dict[x][1],"from":list(map(json.loads,other_dict[x][2]))} for x in other_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)
-    main_profile["phone_numbers"] = sorted([{"id":x,"value":phone_dict[x][0],"count":phone_dict[x][1],"from":list(map(json.loads,phone_dict[x][2]))} for x in phone_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)
-    main_profile["addresses"] = sorted([{"id":x,"value":address_dict[x][0],"count":address_dict[x][1],"from":list(map(json.loads,address_dict[x][2]))} for x in address_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)
-    main_profile["names"] = sorted([{"id":x,"value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)[:3]
-    main_profile["emails"] = sorted([{"id":x,"value":email_dict[x][0],"count":email_dict[x][1],"from":list(map(json.loads, email_dict[x][2]))} for x in email_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)
-    main_profile["relationships"] = sorted([{"id":x,"type":"connection","value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2]))} for x in names_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)[3:]
-    main_profile["social_media"] = sorted([{"id":x,"url":social_dict[x][0],"count":social_dict[x][1],"profile_url":social_dict[x][2],"username":social_dict[x][3]} for x in social_dict if x not in unlikes],key=lambda x: x["count"],reverse=True)
+    main_profile["other"] = sorted([{"id":x,"value":other_dict[x][0],"count":other_dict[x][1],"from":list(map(json.loads,other_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in other_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)
+    main_profile["phone_numbers"] = sorted([{"id":x,"value":phone_dict[x][0],"count":phone_dict[x][1],"from":list(map(json.loads,phone_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in phone_dict],key=lambda x: len(x["from"]),reverse=True)
+    main_profile["addresses"] = sorted([{"id":x,"value":address_dict[x][0],"count":address_dict[x][1],"from":list(map(json.loads,address_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in address_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)
+    main_profile["names"] = sorted([{"id":x,"value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in names_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)[:3]
+    main_profile["emails"] = sorted([{"id":x,"value":email_dict[x][0],"count":email_dict[x][1],"from":list(map(json.loads, email_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in email_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)
+    main_profile["relationships"] = sorted([{"id":x,"type":"connection","value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in names_dict if x not in unlikes],key=lambda x: len(x["from"]),reverse=True)[3:]
+    main_profile["social_media"] = sorted([{"id":x,"url":social_dict[x][0],"count":social_dict[x][1],"profile_url":social_dict[x][2],"username":social_dict[x][3], "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in social_dict if x not in unlikes],key=lambda x: x["count"],reverse=True)
     
     return main_profile
 
@@ -531,11 +527,31 @@ def do_reload(name):
 def handle_reload():    
     name = request.args.get("name")
     print "GET: Reload", name
+    qs = getQueries(name)
+    q, num_pages = qs[-1]
+    likes,unlikes = getLikesUnlikes(name)
+    new_searches = []
     results = do_reload(name)
     if len(results["hits"]["hits"]) >= 1:
-        resp = Response(json.dumps(results["hits"]["hits"][-1]["_source"]["data"],indent=2))
-        resp.headers['Access-Control-Allow-Origin'] = '*'
-        return resp
+        data = results["hits"]["hits"][-1]["_source"]["data"]
+        for p in data["profile"]["names"] + data["profile"]["phone_numbers"] + data["profile"]["emails"] \
+            + data["profile"]["addresses"] + data["profile"]["other"]:
+            if p["id"] in likes:
+                pass
+                #new_searches.append(p["value"])
+        for p in data["pages"]:
+            for e in p["entities"]:
+                if e["id"] in likes:
+                    pass
+                    #new_searches.append(e["value"])
+
+    queries = [q] + new_searches
+    print queries
+    return_data = process_search(queries,name,num_pages)
+    resp = Response(json.dumps(return_data,indent=2))
+    nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
 
 # Called when save/export is clicked
 @app.route('/save_export/', methods=['GET'])
@@ -563,11 +579,13 @@ def handle_crunch():
         for p in data["profile"]["names"] + data["profile"]["phone_numbers"] + data["profile"]["emails"] \
             + data["profile"]["addresses"] + data["profile"]["other"]:
             if p["id"] in likes:
-                new_searches.append(p["value"])
+                pass
+                #new_searches.append(p["value"])
         for p in data["pages"]:
             for e in p["entities"]:
                 if e["id"] in likes:
-                    new_searches.append(e["value"])
+                    pass
+                    #new_searches.append(e["value"])
 
     queries = [q] + new_searches
     print queries
@@ -674,6 +692,34 @@ def populateEntries(entries,tree_stuff):
             populateEntries(entries,child) 
 
 
+def mark_data(page,likes,unlikes):
+    data_things = [
+        "names",
+        "emails",
+        "phone_numbers",
+        "addresses",
+        "relationships",
+        "other",
+        "social_media"
+    ]
+
+    for entity in page["entities"]:
+        entity["metadata"] = {"unliked":False, "liked":False}
+        if entity["id"] in unlikes:
+            entity["metadata"]["unliked"] = True
+        if entity["id"] in likes:
+            entity["metadata"]["liked"] = True
+
+    for thing in data_things:
+        for p in page["profile"][thing]:
+            p["metadata"] = {"unliked":False, "liked":False}
+            if p["id"] in unlikes:
+                p["metadata"]["unliked"] = True
+            if p["id"] in likes:
+                p["metadata"]["liked"] = True
+
+    return page
+
 def process_search(q,name,num_pages=1):
     # Google results...
     has_text_results = False
@@ -719,6 +765,7 @@ def process_search(q,name,num_pages=1):
                 if page["id"] in unlikes:
                     print "Page unliked."
                     continue
+                page = mark_data(page,likes,unlikes)
                 entries.append(page)
                 text = getByURL(url,"texts",name)["text"]
                 if text.strip() != "":
@@ -768,6 +815,7 @@ def process_search(q,name,num_pages=1):
 
             if not social:
                 data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other)
+                data = mark_data(data,likes,unlikes)
             entries.append(data)
         num_pages += 1
 
@@ -784,6 +832,8 @@ def process_search(q,name,num_pages=1):
     profile = build_profile(entries,likes,unlikes)
 
     return_data = {"profile":profile,"pages":entries,"treemap":tree_stuff}
+
+    print json.dumps(profile,indent=2)
 
     return return_data
 
