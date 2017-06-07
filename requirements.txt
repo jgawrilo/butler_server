@@ -13,4 +13,5 @@ gensim
 haul
 fuzzywuzzy
 pandas
+pyvirtualdisplay
 python-Levenshtein

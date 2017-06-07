@@ -22,6 +22,7 @@ from elasticsearch import Elasticsearch
 import hashlib
 from fuzzywuzzy import fuzz
 from google import google
+import search2
 
 reload(sys)  
 sys.setdefaultencoding('utf8')
@@ -302,6 +303,8 @@ def get_urls(terms,num_pages=1):
         print "Searching for:" + term
         search_results = google.search(term, num_pages)
         results.extend([{"q":term,"url":x.link} for x in search_results])
+    if not results:
+        results = map(lambda x: {"q":terms[0],"url":x}, search2.do_search(terms[0],num_pages))
     return results
 
 def is_float(s):
@@ -332,7 +335,7 @@ def build_social_json(name, url,ptype):
         "entities":[],
         "type":ptype,
     }
-    nes.index(index="butler", doc_type="pages",body=data,id=pid)
+    nes.index(index=config["butler_index"], doc_type="pages",body=data,id=pid)
     return data
 
 def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images,other):
@@ -356,7 +359,7 @@ def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images
         "entities":entities,
         "type":ptype, 
     }
-    nes.index(index="butler", doc_type="pages", body=data, id=pid)
+    nes.index(index=config["butler_index"], doc_type="pages", body=data, id=pid)
     return data
 
 def updateAllNodes (node):
@@ -462,7 +465,7 @@ def build_profile(entries,likes,unlikes):
 def handle_name():
     name = request.args.get("name")
     print "GET: Name", name
-    nes.index(index="butler", doc_type="searches",body={"name":name},id=name)
+    nes.index(index=config["butler_index"], doc_type="searches",body={"name":name},id=name)
     return resp
 
 # Called when something is unliked
@@ -471,7 +474,7 @@ def handle_unlike():
     name = request.args.get("name")
     uid = request.args.get("id")
     print "GET: Unlike", name, uid
-    nes.index(index="butler", doc_type="unlikes",body={"name":name,"time":datetime.now().isoformat(),"id":uid})
+    nes.index(index=config["butler_index"], doc_type="unlikes",body={"name":name,"time":datetime.now().isoformat(),"id":uid})
     return resp
 
 # Called when something is liked
@@ -480,7 +483,7 @@ def handle_like():
     name = request.args.get("name")
     lid = request.args.get("id")
     print "GET: Like", name, lid
-    nes.index(index="butler", doc_type="likes",body={"name":name,"time":datetime.now().isoformat(),"id":lid})
+    nes.index(index=config["butler_index"], doc_type="likes",body={"name":name,"time":datetime.now().isoformat(),"id":lid})
     return resp
 
 # Called when clear is clicked
@@ -500,10 +503,10 @@ def handle_get_searches():
         "size": 0,
         "aggs" : {
             "searches" : {
-                "terms" : { "field" : "name" }
+                "terms" : { "field" : "name", "size":500 }
             }
     }}
-    result = nes.search(index="butler", doc_type="searches", body=query)
+    result = nes.search(index=config["butler_index"], doc_type="searches", body=query)
     resp = Response(json.dumps(result["aggregations"]["searches"]["buckets"],indent=2))
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
@@ -519,7 +522,7 @@ def do_reload(name):
             }
     }
 
-    results = nes.search(index="butler", doc_type="results", body=query)
+    results = nes.search(index=config["butler_index"], doc_type="results", body=query)
     return results
 
 # Called when reload is clicked
@@ -549,7 +552,7 @@ def handle_reload():
     print queries
     return_data = process_search(queries,name,num_pages)
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -591,7 +594,7 @@ def handle_crunch():
     print queries
     return_data = process_search(queries,name,num_pages)
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -605,7 +608,7 @@ def getByURL(url, dtype, name):
                 }
             }
     }
-    results = nes.search(index="butler", doc_type=dtype, body=query)
+    results = nes.search(index=config["butler_index"], doc_type=dtype, body=query)
 
     if len(results["hits"]["hits"]) == 1:
         return results["hits"]["hits"][0]["_source"]
@@ -626,7 +629,7 @@ def getQueries(name):
                 }
             }
     }
-    results = nes.search(index="butler", doc_type="queries", body=query)
+    results = nes.search(index=config["butler_index"], doc_type="queries", body=query)
 
     if len(results["hits"]["hits"]) >= 1:
         return map(lambda x:(x["_source"]["query"],x["_source"]["num_pages"]),results["hits"]["hits"])
@@ -643,8 +646,8 @@ def getLikesUnlikes(name):
                 }
             }
     }
-    likes = nes.search(index="butler", doc_type="likes", body=query)
-    unlikes = nes.search(index="butler", doc_type="unlikes", body=query)
+    likes = nes.search(index=config["butler_index"], doc_type="likes", body=query)
+    unlikes = nes.search(index=config["butler_index"], doc_type="unlikes", body=query)
 
     return set(map(lambda x: x["_source"]["id"], likes["hits"]["hits"])), set(map(lambda x: x["_source"]["id"], unlikes["hits"]["hits"]))
 
@@ -660,7 +663,7 @@ def handle_previous():
     num_pages -= 1
     return_data = process_search([q],name,num_pages)
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -675,7 +678,7 @@ def handle_next():
     num_pages += 1
     return_data = process_search([q],name,num_pages)
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -731,7 +734,7 @@ def process_search(q,name,num_pages=1):
         likes, unlikes = getLikesUnlikes(name)
 
         for query in q:
-            nes.index(index="butler", doc_type="queries",body={"name":name,"query":query,"time":datetime.now().isoformat(), "num_pages":num_pages})
+            nes.index(index=config["butler_index"], doc_type="queries",body={"name":name,"query":query,"time":datetime.now().isoformat(), "num_pages":num_pages})
 
         texts = []
         good_urls = []
@@ -806,7 +809,7 @@ def process_search(q,name,num_pages=1):
             texts.append(all_text)
             if all_text.strip() != "":
                 has_text_results = True
-            nes.index(index="butler", doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
+            nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
                 "url":url,"text":all_text,"main_text":text})
 
             #get_tables(url,i)
@@ -848,7 +851,7 @@ def handle_search():
     return_data = process_search([q],name,num_pages)
 
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 

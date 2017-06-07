@@ -6,20 +6,20 @@ import sys
 
 CONFIG = "config.json"
 SCHEMA = "schema.json"
-BUTLER_INDEX = "butler"
 
 class Creator(object):
 
   def __init__(self):
     self.config = json.load(open(CONFIG))
     self.es = Elasticsearch([self.config["es"]])
+    self.butler_index = self.config["butler_index"]
 
   def delete(self):
-    self.es.indices.delete(index=BUTLER_INDEX, ignore=[400, 404])
+    self.es.indices.delete(index=self.butler_index, ignore=[400, 404])
 
   def create(self):
     mapping = open(SCHEMA).read()
-    self.es.indices.create(index=BUTLER_INDEX, body=mapping, ignore=[400, 404])
+    self.es.indices.create(index=self.butler_index, body=mapping, ignore=[400, 404])
 
   def reset(self):
     self.delete()
