@@ -19,8 +19,7 @@ def do_search(q,num_pages=1):
     options = webdriver.ChromeOptions()
     options.add_argument('headless')
     options.add_argument('window-size=1200x600')
-
-
+    options.add_argument("--no-sandbox");
 
     # initialize the driver
     driver = webdriver.Chrome(chrome_options=options)
