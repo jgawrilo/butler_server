@@ -12,7 +12,7 @@ import pyap
 import json
 from table import HTMLTableParser
 from nltk.corpus import stopwords
-from flask import Flask, request, Response
+from flask import Flask, request, Response, send_from_directory
 from gensim import corpora
 from gensim.models.hdpmodel import HdpModel
 import haul
@@ -23,6 +23,7 @@ import hashlib
 from fuzzywuzzy import fuzz
 from google import google
 import search2
+import os
 
 reload(sys)  
 sys.setdefaultencoding('utf8')
@@ -314,11 +315,12 @@ def is_float(s):
     except ValueError:
         return  False
 
-def build_social_json(name, url,ptype):
+def build_social_json(name, url,ptype,screenshot_path):
     pid = "page" + hashlib.md5(url).hexdigest()
     data = {
         "name":name,
         "url":url,
+        "screenshot_path":screenshot_path,
         "id":pid,
         "title":None,
         "profile":{
@@ -338,11 +340,12 @@ def build_social_json(name, url,ptype):
     nes.index(index=config["butler_index"], doc_type="pages",body=data,id=pid)
     return data
 
-def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images,other):
+def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images,other,screenshot_path):
     pid = "page" + hashlib.md5(url).hexdigest()
     data = {
         "name":name,
         "url":url,
+        "screenshot_path":screenshot_path,
         "id":pid,
         "title":title,
         "profile":{
@@ -615,6 +618,11 @@ def getByURL(url, dtype, name):
     else:
         return None
 
+def getScreenShot(url):
+    ss_id = hashlib.md5(url).hexdigest() + ".png"
+    os.system(config["chrome_loc"] + ' --headless --disable-gpu --screenshot --window-size=1280,1696 ' + url)
+    os.system("mv screenshot.png ss/" + ss_id)
+    return "/ss/" + ss_id
 
 def getQueries(name):
     query = {
@@ -780,7 +788,8 @@ def process_search(q,name,num_pages=1):
 
             if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
                 print "Social"
-                data = build_social_json(name,url,"social")
+                screenshot_path = getScreenShot(url)
+                data = build_social_json(name,url,"social",screenshot_path)
                 all_entities.extend(data["entities"])
                 social = True
 
@@ -791,6 +800,7 @@ def process_search(q,name,num_pages=1):
                     text = get_readability_text(html)
                     text,title = get_text_title(text)
                     addresses = getAddresses(all_text,likes,unlikes)
+                    screenshot_path = getScreenShot(url)
                     entities,other = doNLP(text,likes,unlikes)
                     print 'full done'
                     emails = get_emails(all_text,likes,unlikes)
@@ -817,7 +827,7 @@ def process_search(q,name,num_pages=1):
             good_urls.append(url)
 
             if not social:
-                data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other)
+                data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path)
                 data = mark_data(data,likes,unlikes)
             entries.append(data)
         num_pages += 1
@@ -836,9 +846,14 @@ def process_search(q,name,num_pages=1):
 
     return_data = {"profile":profile,"pages":entries,"treemap":tree_stuff}
 
-    print json.dumps(profile,indent=2)
+    print json.dumps(entries,indent=2)
 
     return return_data
+
+
+@app.route('/ss/<path:path>')
+def send_js(path):
+    return send_from_directory('ss', path)
 
 # Called when twitter is scraped...
 @app.route('/search/', methods=['GET'])
