@@ -3,5 +3,6 @@
     "nlp_service":"http://localhost:9000",
     "port":5000,
     "platform":"MAC",
-    "butler_index":"butler"
+    "butler_index":"butler",
+    "chrome_loc":"/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome"
 }
