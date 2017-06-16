@@ -620,7 +620,7 @@ def getByURL(url, dtype, name):
 
 def getScreenShot(url):
     ss_id = hashlib.md5(url).hexdigest() + ".png"
-    os.system(config["chrome_loc"] + ' --headless --disable-gpu --screenshot --window-size=1280,1696 ' + url)
+    os.system(config["chrome_loc"] + ' --headless --disable-gpu --no-sandbox --screenshot ' + url)
     os.system("mv screenshot.png ss/" + ss_id)
     return "/ss/" + ss_id
 
