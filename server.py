@@ -5,7 +5,6 @@ from bs4 import BeautifulSoup
 import re
 import nltk
 import sys
-from nltk.stem.snowball import SnowballStemmer
 from readability.readability import Document
 from selenium import webdriver
 import pyap
@@ -44,20 +43,17 @@ regex = re.compile(("([a-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+\/=?^_`"
                     "{|}~-]+)*(@|\sat\s)(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(\.|"
                     "\sdot\s))+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)"))
 
-
-
 # Social Sites
 social_mappings = [
-    {"site":"Google","urls":["https://plus.google.com/"]},
-    {"site":"LinkedIn","urls":["https://www.linkedin.com/"]},
-    {"site":"Instagram","urls":["https://www.instagram.com/"],"left_split":"https://www.instagram.com/",
-    "profile_class":"_79dar","image_class":"_iv4d5"},
-    {"site":"Github","urls":["https://github.com/"],"left_split":"https://github.com/"},
-    {"site":"Pinterest","urls":["https://www.pinterest.com/"],"left_split":"https://www.pinterest.com/"},
-    {"site":"Facebook","urls":["https://www.facebook.com/"], "left_split":"https://www.facebook.com/"},
-    {"site":"Twitter","urls":["https://twitter.com/"],"left_split":"https://twitter.com/"},
-    {"site":"YouTube","urls":["https://www.youtube.com"],"left_split":"https://twitter.com/"}
-    #{"site":"F6S","urls":["https://www.f6s.com/"]}
+        {"site":"Google","urls":["https://plus.google.com/"]},
+        {"site":"LinkedIn","urls":["https://www.linkedin.com/"]},
+        {"site":"Instagram","urls":["https://www.instagram.com/"],"left_split":"https://www.instagram.com/",
+        "profile_class":"_79dar","image_class":"_iv4d5"},
+        {"site":"Github","urls":["https://github.com/"],"left_split":"https://github.com/"},
+        {"site":"Pinterest","urls":["https://www.pinterest.com/"],"left_split":"https://www.pinterest.com/"},
+        {"site":"Facebook","urls":["https://www.facebook.com/"], "left_split":"https://www.facebook.com/"},
+        {"site":"Twitter","urls":["https://twitter.com/"],"left_split":"https://twitter.com/"},
+        {"site":"YouTube","urls":["https://www.youtube.com"],"left_split":"https://twitter.com/"}
     ]
 
 stop = [
@@ -87,17 +83,6 @@ def visible(element):
     elif re.match('<!--.*-->', str(element.encode('utf-8'))):
         return False
     return True
-
-def tokenize_and_stem(text):
-    # first tokenize by sentence, then by word to ensure that punctuation is caught as it's own token
-    tokens = [word for sent in nltk.sent_tokenize(text) for word in nltk.word_tokenize(sent)]
-    filtered_tokens = []
-    # filter out any tokens not containing letters (e.g., numeric tokens, raw punctuation)
-    for token in tokens:
-        if re.search('[a-zA-Z]', token):
-            filtered_tokens.append(token)
-    stems = [stemmer.stem(t) for t in filtered_tokens]
-    return stems
 
 def process_entity_relations(entity_relations_str,entities):
     entity_set = set()
@@ -219,29 +204,35 @@ def get_images(url):
     return map(lambda x: url + x if x.startswith("/") else x,result.image_urls)
 
 def get_text_title(html):
-    soup = BeautifulSoup(html, "lxml")
-    data = soup.findAll(text=True)
-    result = filter(visible, data)
-    text = " ".join(result).encode("utf-8","ignore")
-    title = ""
-    if soup.title != None:
-        title = soup.title.string
-    return text.strip(), title.strip()
+    try:
+        soup = BeautifulSoup(html, "lxml")
+        data = soup.findAll(text=True)
+        result = filter(visible, data)
+        text = " ".join(result).encode("utf-8","ignore")
+        title = ""
+        if soup.title != None:
+            title = soup.title.string
+        return text.strip(), title.strip()
+    except:
+        return "",""
 
 
 def get_readability_text(html):
-    readable_article = Document(html).summary()
-    readable_title = Document(html).short_title()
-    return readable_article.strip()
+    try:
+        readable_article = Document(html).summary()
+        readable_title = Document(html).short_title()
+        return readable_article.strip()
+    except:
+        return ""
 
 
 def doNLP(text,likes,unlikes):
-    print "doNLP"
+    print "Starting NLP..."
     url = config["nlp_service"] + '/?properties={"annotators": "tokenize,ssplit,pos,ner,depparse,openie", "date": "2017-05-04T15:03:54"},"pipelineLanguage":"en""}'
     return_ents, best_return_rels = [],[]
     try:
-        resp = requests.post(url,data=text)
-        print "done."
+        resp = requests.post(url,data=text,timeout=10)
+        print "Done with NLP!"
         data = json.loads(resp.text)
         entities = []
 
@@ -255,7 +246,6 @@ def doNLP(text,likes,unlikes):
                     entities.append((ner_type,token["word"],token["index"]))
             for rel in sentence["openie"]:
                 return_rels.append({"id":"other"+hashlib.md5(" ".join([rel["subject"],rel["relation"],rel["object"]])).hexdigest(),"value":" ".join([rel["subject"],rel["relation"],rel["object"]])})
-        print "done1"
         ent_list = []
         last_type = None
         last_index = 1
@@ -266,7 +256,6 @@ def doNLP(text,likes,unlikes):
                 ent_list.append((ent[1],ent[0]))
             last_type = ent[0]
             last_index = ent[2]
-        print "done2"
         ent_dict = {}
         entity_set = set()
         for ent in ent_list:
@@ -280,7 +269,6 @@ def doNLP(text,likes,unlikes):
             ent_dict[(ent_txt,label)] = ent_dict.get((ent_txt,label),0)
             ent_dict[(ent_txt,label)] += 1
             entity_set.add(ent_txt)
-        print "done3"
 
         best_return_rels = []
         for rel in return_rels:
@@ -295,7 +283,7 @@ def doNLP(text,likes,unlikes):
         return_ents = [{"value":x[0],"type":x[1],"count":ent_dict[x],"id":"entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest()} for x in ent_dict \
         if "entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest() not in unlikes]
     except:
-        print "Error"
+        print "Error during NLP"
     return return_ents, best_return_rels
 
 def get_urls(terms,num_pages=1):
@@ -398,10 +386,9 @@ def prune_entities(entries):
     for e in entries:
         for n in e["entities"]:
             if n["type"] == "PERSON":
-                print "Testing", n["value"]
                 for test in e_set:
                     if test != n["value"] and fuzz.ratio(test, n["value"]) >= 64:
-                        print test, n["value"]
+                        pass
 
 
 
@@ -467,7 +454,7 @@ def build_profile(entries,likes,unlikes):
 @app.route('/name/', methods=['GET'])
 def handle_name():
     name = request.args.get("name")
-    print "GET: Name", name
+    print "GET: Name->", name
     nes.index(index=config["butler_index"], doc_type="searches",body={"name":name},id=name)
     return resp
 
@@ -534,7 +521,7 @@ def handle_reload():
     name = request.args.get("name")
     print "GET: Reload", name
     qs = getQueries(name)
-    q, num_pages = qs[-1]
+    q, num_pages, language = qs[-1]
     likes,unlikes = getLikesUnlikes(name)
     new_searches = []
     results = do_reload(name)
@@ -552,10 +539,9 @@ def handle_reload():
                     #new_searches.append(e["value"])
 
     queries = [q] + new_searches
-    print queries
-    return_data = process_search(queries,name,num_pages)
+    return_data = process_search(queries,name,num_pages,language)
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -575,7 +561,7 @@ def handle_crunch():
     name = request.args.get("name")
     print "GET: Crunch ->", name
     qs = getQueries(name)
-    q, num_pages = qs[-1]
+    q, num_pages,language = qs[-1]
     likes,unlikes = getLikesUnlikes(name)
     print likes
     new_searches = []
@@ -594,10 +580,11 @@ def handle_crunch():
                     #new_searches.append(e["value"])
 
     queries = [q] + new_searches
+
     print queries
-    return_data = process_search(queries,name,num_pages)
+    return_data = process_search(queries,name,num_pages,language)
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -622,7 +609,10 @@ def getScreenShot(url):
     ss_id = hashlib.md5(url).hexdigest() + ".png"
     os.system(config["chrome_loc"] + ' --headless --disable-gpu --no-sandbox --screenshot ' + url)
     os.system("mv screenshot.png ss/" + ss_id)
-    return "/ss/" + ss_id
+
+    ss_return = "/ss/" + ss_id
+    print "SS: " + ss_return
+    return ss_return
 
 def getQueries(name):
     query = {
@@ -640,7 +630,7 @@ def getQueries(name):
     results = nes.search(index=config["butler_index"], doc_type="queries", body=query)
 
     if len(results["hits"]["hits"]) >= 1:
-        return map(lambda x:(x["_source"]["query"],x["_source"]["num_pages"]),results["hits"]["hits"])
+        return map(lambda x:(x["_source"]["query"],x["_source"]["num_pages"],x["_source"]["language"]),results["hits"]["hits"])
     else:
         return []
 
@@ -666,12 +656,12 @@ def handle_previous():
     name = request.args.get("name")
     print "GET: Previous ->", name
     qs = getQueries(name)
-    q, num_pages = qs[-1]
-    print q, num_pages
+    q, num_pages,language = qs[-1]
+    print q, num_pages, language
     num_pages -= 1
-    return_data = process_search([q],name,num_pages)
+    return_data = process_search([q],name,num_pages,language)
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -681,18 +671,17 @@ def handle_next():
     name = request.args.get("name")
     print "GET: Next ->", name
     qs = getQueries(name)
-    q, num_pages = qs[-1]
+    q, num_pages, language = qs[-1]
     print q, num_pages
     num_pages += 1
-    return_data = process_search([q],name,num_pages)
+    return_data = process_search([q],name,num_pages,language)
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
 def populateEntries(entries,tree_stuff):
     if "scores" in tree_stuff:
-        print json.dumps(tree_stuff,indent=2)
         entries[tree_stuff["node_id"]]["topic"] = { \
             "scores":tree_stuff["scores"],\
             "number":"",\
@@ -731,18 +720,19 @@ def mark_data(page,likes,unlikes):
 
     return page
 
-def process_search(q,name,num_pages=1):
+def process_search(q,name,num_pages=1,language="english"):
     # Google results...
     has_text_results = False
     while not has_text_results:
-        print "Getting %d more pages" % num_pages
+        print "Getting %d pages" % num_pages
         urls = get_urls(q,num_pages)
+        print len(urls), " urls found."
         global total_count
 
         likes, unlikes = getLikesUnlikes(name)
 
         for query in q:
-            nes.index(index=config["butler_index"], doc_type="queries",body={"name":name,"query":query,"time":datetime.now().isoformat(), "num_pages":num_pages})
+            nes.index(index=config["butler_index"], doc_type="queries",body={"name":name,"query":query,"time":datetime.now().isoformat(), "num_pages":num_pages, "language":language})
 
         texts = []
         good_urls = []
@@ -751,9 +741,9 @@ def process_search(q,name,num_pages=1):
         for i,url_obj in enumerate(urls):
             url = url_obj["url"]
             query = url_obj["q"]
-            print url
+            print i,":",url
             if url.endswith(".pdf") or any(map(url.startswith,stop)):
-                print "Skipping..."
+                print "Skipping.  PDF or in stoplist..."
                 continue
 
             html = ""
@@ -781,6 +771,8 @@ def process_search(q,name,num_pages=1):
                 text = getByURL(url,"texts",name)["text"]
                 if text.strip() != "":
                     has_text_results = True
+                else:
+                    print "No Text..."
                 texts.append(text)
                 good_urls.append(url)
                 all_entities.extend(page["entities"])
@@ -795,6 +787,7 @@ def process_search(q,name,num_pages=1):
 
             else:
                 try:
+                    print 'New Page.'
                     html = get_html(url)
                     all_text,title = get_text_title(html)
                     text = get_readability_text(html)
@@ -802,11 +795,10 @@ def process_search(q,name,num_pages=1):
                     addresses = getAddresses(all_text,likes,unlikes)
                     screenshot_path = getScreenShot(url)
                     entities,other = doNLP(text,likes,unlikes)
-                    print 'full done'
                     emails = get_emails(all_text,likes,unlikes)
                     phones = getPhoneNumbers(all_text,likes,unlikes)
                     if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
-                        print "Too many of something..."
+                        print "Skipping.  Too many of something..."
                         continue
                     all_entities.extend(entities)
                     #images = get_images(url)
@@ -815,12 +807,11 @@ def process_search(q,name,num_pages=1):
                     continue
                 if text == None or text.strip() == "":
                     print "No Text..."
-                    continue
             texts.append(all_text)
             if all_text.strip() != "":
                 has_text_results = True
             nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
-                "url":url,"text":all_text,"main_text":text})
+                "language":language,"url":url,"text":all_text,"main_text":text})
 
             #get_tables(url,i)
             
@@ -830,7 +821,9 @@ def process_search(q,name,num_pages=1):
                 data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path)
                 data = mark_data(data,likes,unlikes)
             entries.append(data)
-        num_pages += 1
+        if not has_text_results:
+            print "*** No Results with Text.  Getting more pages. ***"
+            num_pages += 1
 
     doTexts = []
     for i, text in enumerate(texts):
@@ -838,15 +831,25 @@ def process_search(q,name,num_pages=1):
 
     total_count = len(doTexts)
 
+    print "*** Running LDA ***"
+
     tree_stuff = doLDA(doTexts,0,None)
+
+    print "*** Done with LDA ***"
 
     populateEntries(entries,tree_stuff)
 
+    print "*** Building Profile ***"
+
     profile = build_profile(entries,likes,unlikes)
 
-    return_data = {"profile":profile,"pages":entries,"treemap":tree_stuff}
+    meta = {"name":name,"q":q,"num_pages":num_pages,"language":language}
 
-    print json.dumps(entries,indent=2)
+    return_data = {"profile":profile,"pages":entries,"treemap":tree_stuff,"meta":meta}
+
+    print json.dumps(meta,indent=2)
+
+    print "*** Returned Results ***"
 
     return return_data
 
@@ -860,13 +863,14 @@ def send_js(path):
 def handle_search():
     q = request.args.get("q")
     name = request.args.get("name")
-    num_pages = int(request.args.get("n",1))
-    print "GET: Search ->", name, q, num_pages
+    language = request.args.get("language")
+    num_pages = int(request.args.get("n",5))
+    print "GET: Search ->", name, q, num_pages, language
 
-    return_data = process_search([q],name,num_pages)
+    return_data = process_search([q],name,num_pages,language)
 
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
