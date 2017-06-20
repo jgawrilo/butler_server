@@ -864,7 +864,7 @@ def handle_search():
     q = request.args.get("q")
     name = request.args.get("name")
     language = request.args.get("language")
-    num_pages = int(request.args.get("n",5))
+    num_pages = int(request.args.get("n",1))
     print "GET: Search ->", name, q, num_pages, language
 
     return_data = process_search([q],name,num_pages,language)
