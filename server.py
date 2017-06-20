@@ -29,7 +29,6 @@ sys.setdefaultencoding('utf8')
 
 config = json.load(open("config.json"))
 nes = Elasticsearch([config["es"]])
-stemmer = SnowballStemmer("english")
 
 total_count = 0
 
