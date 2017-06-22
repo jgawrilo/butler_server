@@ -16,6 +16,22 @@
                }
             }
     },
+    "bad_urls":{
+      "properties": {
+               "name": {
+                  "type": "string",
+                  "index": "not_analyzed"
+               },
+               "url": {
+                  "type": "string",
+                  "index": "not_analyzed"
+               },
+               "query": {
+                  "type": "string",
+                  "index": "not_analyzed"
+               }
+            }
+    },
     "pages":{
       "properties": {
                "name": {
@@ -51,6 +67,10 @@
     "queries":{
       "properties": {
                "name": {
+                  "type": "string",
+                  "index": "not_analyzed"
+               },
+               "time": {
                   "type": "string",
                   "index": "not_analyzed"
                }
