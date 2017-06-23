@@ -14,6 +14,7 @@ from nltk.corpus import stopwords
 from flask import Flask, request, Response, send_from_directory
 from gensim import corpora
 from gensim.models.hdpmodel import HdpModel
+from gensim.models import TfidfModel
 from gensim.summarization import summarize
 import haul
 import random
@@ -124,7 +125,11 @@ def doLDA(docu,level,last_count,top_text):
     # remove common words and tokenize
     slots, documents, urls, titles, summaries = [],[],[],[],[]
 
+    full_results = []
+
     empty_slots, empty_urls,empty_titles, empty_summaries = [],[],[],[]
+
+    empty_results = []
 
     for x in docu:
         if x[0]:
@@ -133,11 +138,13 @@ def doLDA(docu,level,last_count,top_text):
             urls.append(x[2])
             titles.append(x[3])
             summaries.append(x[4])
+            full_results.append(x[5])
         else:
             empty_slots.append(x[1])
             empty_urls.append(x[2])
             empty_titles.append(x[3])
             empty_summaries.append(x[4])
+            empty_results.append(x[5])
 
     stoplist = set(stopwords.words('english'))
     punctuation = set(string.punctuation)
@@ -147,18 +154,19 @@ def doLDA(docu,level,last_count,top_text):
 
     dictionary = corpora.Dictionary(texts)
     corpus = [dictionary.doc2bow(text) for text in texts]
-    hdp = HdpModel(corpus,dictionary,random_state=7)
+    tfidf = TfidfModel(corpus)
+    hdp = HdpModel(tfidf[corpus],dictionary,random_state=7)
     lda = hdp.suggested_lda_model()
 
-    topic_answers_dict = {"count":len(docu),"summary":None,"title":top_text,"url":None,"level":level,"children":[],"node_id":last_count}
+    topic_answers_dict = {"count":len(docu),"summary":None,"title":top_text,"url":None,"level":level,"children":[],"node_id":last_count,"type":"cluster"}
     app.logger.info("AGG Level object -> " + json.dumps(topic_answers_dict))
     
     if empty_slots:
         app.logger.info("%d empty pages heading to a single topic" % len(empty_slots))
         last_count += 1
-        topic_answers_dict["children"].append({"count":len(empty_slots),"summary":None,"title":"No Text","url":None,"node_id":last_count,"level":1,"children":[]})
+        topic_answers_dict["children"].append({"count":len(empty_slots),"summary":None,"title":"No Text","url":None,"node_id":last_count,"level":1,"children":[],"type":"cluster"})
         for i,x in enumerate(empty_slots):
-            topic_answers_dict["children"][-1]["children"].append({"count":1,"summary":"","title":empty_titles[i],"url":empty_urls[i],"node_id":empty_slots[i],"level":2,"children":[],"scores":[]})
+            topic_answers_dict["children"][-1]["children"].append({"type":empty_results[i]["type"],"count":1,"summary":"","title":empty_titles[i],"url":empty_urls[i],"node_id":empty_slots[i],"level":2,"children":[],"scores":[]})
 
     result_dict = {}
     app.logger.info("%d pages with text" % len(documents))
@@ -166,7 +174,7 @@ def doLDA(docu,level,last_count,top_text):
         entries = sorted(lda[corpus[i]],key=lambda x: x[1],reverse=True)
         if entries:
             d = lda.show_topics(-1,formatted=False)[entries[0][0]]
-            ret = {"text":documents[i],"summary":summaries[i],"url":urls[i],"title":titles[i],"row":i, "slot":slots[i], "number":d[0],"scores":map(lambda x:{"value":x[0].replace("\"",""),"score":x[1]},d[1])[:5]}
+            ret = {"result":full_results[i],"text":documents[i],"summary":summaries[i],"url":urls[i],"title":titles[i],"row":i, "slot":slots[i], "number":d[0],"scores":map(lambda x:{"value":x[0].replace("\"",""),"score":x[1]},d[1])[:5]}
             result_dict[d[0]] = result_dict.get(d[0],[])
             result_dict[d[0]].append(ret)
         else:
@@ -176,17 +184,17 @@ def doLDA(docu,level,last_count,top_text):
         if len(documents) == len(result_dict[k]):
             app.logger.info("Every document was in a single topic.")
             for res in result_dict[k]:
-                topic_answers_dict["children"].append({"count":1,"url":res["url"],"summary":res["summary"],"title":res["title"],"node_id":slots[res["row"]],"level":level+1,"children":[],"scores":res["scores"]})
+                topic_answers_dict["children"].append({"type":res["result"]["type"],"count":1,"url":res["url"],"summary":res["summary"],"title":res["title"],"node_id":slots[res["row"]],"level":level+1,"children":[],"scores":res["scores"]})
         elif len(result_dict[k]) > 1:
             app.logger.info("Found a topic with more than 1 page.  Time to run again with...")
-            docs = [(x["text"],x["slot"],x["url"],x["title"],x["summary"]) for x in result_dict[k]]
+            docs = [(x["text"],x["slot"],x["url"],x["title"],x["summary"],x["result"]) for x in result_dict[k]]
             app.logger.info(" ".join(map(lambda x: x[2],docs)))
             topic_answers_dict["children"].append(doLDA(docs,level+1,last_count+1," ".join([x["value"] for x in result_dict[k][0]["scores"]])))
         else:
             app.logger.info("Topic has a single page...")
             app.logger.info(result_dict[k][0]["url"])
             app.logger.info(result_dict[k][0]["scores"])
-            topic_answers_dict["children"].append({"count":1,"summary":result_dict[k][0]["summary"],"title":result_dict[k][0]["title"],"url":result_dict[k][0]["url"],"node_id":slots[result_dict[k][0]["row"]],"level":level+1,"children":[],"scores":result_dict[k][0]["scores"]})
+            topic_answers_dict["children"].append({"type":result_dict[k][0]["result"]["type"],"count":1,"summary":result_dict[k][0]["summary"],"title":result_dict[k][0]["title"],"url":result_dict[k][0]["url"],"node_id":slots[result_dict[k][0]["row"]],"level":level+1,"children":[],"scores":result_dict[k][0]["scores"]})
 
     return topic_answers_dict
 
@@ -358,7 +366,7 @@ def is_float(s):
         return  False
 
 def build_social_json(name, url,ptype,screenshot_path):
-    pid = "page" + hashlib.md5(url).hexdigest()
+    pid = "page_" + hashlib.md5(url).hexdigest()
     data = {
         "name":name,
         "url":url,
@@ -384,7 +392,7 @@ def build_social_json(name, url,ptype,screenshot_path):
     return data
 
 def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images,other,screenshot_path,summary):
-    pid = "page" + hashlib.md5(url).hexdigest()
+    pid = "page_" + hashlib.md5(url).hexdigest()
     data = {
         "name":name,
         "url":url,
@@ -760,6 +768,13 @@ def mark_data(page,likes,unlikes):
         Check every item in page and populate metadata.
         This step could get annoying but leave for now
     """
+
+    page["metadata"] = {"unliked":False, "liked":False}
+    if page["id"] in unlikes:
+        page["metadata"]["unliked"] = True
+    if page["id"] in likes:
+        page["metadata"]["liked"] = True
+
     data_things = [
         "names",
         "emails",
@@ -837,6 +852,7 @@ def process_single_page(in_data):
         #screenshot_path = "ss"
         screenshot_path = getScreenShot(url)
         data = build_social_json(name,url,"social",screenshot_path)
+        data = mark_data(data,likes,unlikes)
 
     # Page is NOT social media and NOT alredy mined.
     else:
@@ -890,15 +906,35 @@ def new_process(q,name,num_pages=1,language="english"):
     """
         Start of search process
     """
+
+    app.logger.info("** Starting new process ** ")
+
+    # Get likes and unlikes
+    likes, unlikes = getLikesUnlikes(name)
+    app.logger.info("Found %d likes and %d unlikes." % (len(likes), len(unlikes)))
+
+    # Need to grab what the user was currently looking at
+    last_results = do_reload(name)
+    liked_urls = []
+
+    if len(last_results["hits"]["hits"]) >= 1:
+        data = last_results["hits"]["hits"][-1]["_source"]["data"]
+        for p in data["pages"]:
+            if p["id"] in likes:
+                liked_urls.append({"url":p["url"],"q":data["meta"]["q"]})
+
+    app.logger.info("%d liked urls we're going to keep" % (len(liked_urls)))
+
+    
     app.logger.info("Getting %d google pages" % num_pages)
 
     # mine urls
     urls = get_urls(q,num_pages)
     app.logger.info(str(len(urls)) + " urls found.")
 
-    # Get likes and unlikes
-    likes, unlikes = getLikesUnlikes(name)
-    app.logger.info("Found %d likes and %d unlikes." % (len(likes), len(unlikes)))
+    urls = urls + liked_urls
+
+    
 
     # Get bad urls so we can skip
     bad_urls = getBadURLS(name)
@@ -946,7 +982,7 @@ def new_process(q,name,num_pages=1,language="english"):
 
     doTexts = []
     for i, token_guy in enumerate(tokens):
-        doTexts.append((token_guy,i,good_urls[i],titles[i],summaries[i]))
+        doTexts.append((token_guy,i,good_urls[i],titles[i],summaries[i],results[i][0]))
 
     app.logger.info("Running LDA with %d pages" % len(doTexts))
 
