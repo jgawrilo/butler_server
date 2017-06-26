@@ -958,7 +958,7 @@ def new_process(q,name,num_pages=1,language="english"):
 
 
     # How many threads to process with        
-    pool = Pool(processes=3)
+    pool = Pool(processes=1)
 
     app.logger.info("Processing %d urls" % len(urls))
 
