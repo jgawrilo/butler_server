@@ -958,7 +958,7 @@ def new_process(q,name,num_pages=1,language="english"):
 
 
     # How many threads to process with        
-    pool = Pool(processes=1)
+    pool = Pool(processes=2)
 
     app.logger.info("Processing %d urls" % len(urls))
 
@@ -966,6 +966,8 @@ def new_process(q,name,num_pages=1,language="english"):
     results = pool.map(process_single_page, map(lambda x:(x[0],x[1],name,likes,unlikes,bad_urls,language),zip(urls,pages_and_texts_and_tokens)))
 
     app.logger.info("Finished %d urls" % len(results))
+
+    pool.close()
     
     # Filter out results from urls with errors
     results = filter(lambda x: len(x) > 0,results)
