@@ -189,7 +189,8 @@ def doLDA(docu,level,last_count,top_text):
             app.logger.info("Found a topic with more than 1 page.  Time to run again with...")
             docs = [(x["text"],x["slot"],x["url"],x["title"],x["summary"],x["result"]) for x in result_dict[k]]
             app.logger.info(" ".join(map(lambda x: x[2],docs)))
-            topic_answers_dict["children"].append(doLDA(docs,level+1,last_count+1," ".join([x["value"] for x in result_dict[k][0]["scores"]])))
+            last_count += 1
+            topic_answers_dict["children"].append(doLDA(docs,level+1,last_count," ".join([x["value"] for x in result_dict[k][0]["scores"]])))
         else:
             app.logger.info("Topic has a single page...")
             app.logger.info(result_dict[k][0]["url"])
@@ -417,47 +418,7 @@ def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images
     nes.index(index=config["butler_index"], doc_type="pages", body=data, id=pid)
     return data
 
-def updateAllNodes (node):
-    if len(node["children"]) == 0:
-        return 1
-    for child in node["children"]:
-        node["count"] += updateAllNodes(child)
-    return node["count"]
-
-
-def add_node(node, parent, urls ):
-    # First create the new node and append it to its parent's children
-    url = None
-    count = 0
-    if node.id < len(urls):
-        url = urls[node.id]
-        count = 1
-    newNode = dict( node_id=node.id, url=url, children=[], count=count)
-    parent["children"].append( newNode )
-
-    # Recursively add the current node's children
-    if node.left: add_node( node.left, newNode, urls )
-    if node.right: add_node( node.right, newNode, urls )
-
-def prune_entities(entries):
-    e_set = set()
-    for e in entries:
-        for n in e["entities"]:
-            if n["type"] == "PERSON":
-                # value, type, count, id
-                e_set.add((n["value"]))
-
-    for e in entries:
-        for n in e["entities"]:
-            if n["type"] == "PERSON":
-                for test in e_set:
-                    if test != n["value"] and fuzz.ratio(test, n["value"]) >= 64:
-                        pass
-
-
-
 def build_profile(entries,likes,unlikes):
-    #prune_entities(entries)
     main_profile = {
             "names":[],
             "emails":[],
@@ -833,7 +794,7 @@ def process_single_page(in_data):
     
     # If passed in page, we already processed it.
     if page:
-        app.logger.info("Page already mined.")
+        app.logger.info("Page already mined." + url)
         # If user unliked page, don't process.  Probably should bash other results as well
         if page["id"] in unlikes:
             app.logger.info("Page previously unliked.")
@@ -847,7 +808,7 @@ def process_single_page(in_data):
 
     # If page is social media
     if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
-        app.logger.info("Page is new.  Page is social media.")
+        app.logger.info("Page is new.  Page is social media. " + url)
 
         #screenshot_path = "ss"
         screenshot_path = getScreenShot(url)
@@ -857,7 +818,7 @@ def process_single_page(in_data):
     # Page is NOT social media and NOT alredy mined.
     else:
         try:
-            app.logger.info("Page is new.")
+            app.logger.info("Page is new. " + url)
             html = get_html(url)
             all_text,title = get_text_title(html,url)
             readable_text = get_readability_text(html,url)
@@ -993,7 +954,6 @@ def new_process(q,name,num_pages=1,language="english"):
     app.logger.info("Done running LDA")
 
     populateEntries(entries,tree_stuff)
-
     app.logger.info("Building Profile")
 
     profile = build_profile(entries,likes,unlikes)
