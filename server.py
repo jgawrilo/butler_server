@@ -29,6 +29,27 @@ from multiprocessing import Process, Pool
 import logging
 import string
 
+import subprocess, threading
+
+class Command(object):
+    def __init__(self, cmd):
+        self.cmd = cmd
+        self.process = None
+
+    def run(self, timeout):
+        def target():
+            self.process = subprocess.Popen(self.cmd, shell=True)
+            self.process.communicate()
+
+        thread = threading.Thread(target=target)
+        thread.start()
+
+        thread.join(timeout)
+        if thread.is_alive():
+            self.process.terminate()
+            thread.join()
+        return self.process.returncode
+
 reload(sys)  
 sys.setdefaultencoding('utf8')
 
@@ -637,12 +658,18 @@ def getByURL(url, dtype, name):
 def getScreenShot(url):
     try:
         ss_id = hashlib.md5(url).hexdigest() + ".png"
-        os.system(config["chrome_loc"] + ' --headless --disable-gpu --no-sandbox --screenshot ' + url + " && mv screenshot.png ss/" + ss_id)
-        ss_return = "/ss/" + ss_id
-        app.logger.info("Screenshot created -> " + url + " " + ss_return)
-        return ss_return
+        command = Command(config["chrome_loc"] + ' --headless --disable-gpu --no-sandbox --screenshot ' + url + " && mv screenshot.png ss/" + ss_id)
+        code = command.run(timeout=60)
+        #os.system(config["chrome_loc"] + ' --headless --disable-gpu --no-sandbox --screenshot ' + url + " && mv screenshot.png ss/" + ss_id)
+        if str(code) == "0":
+            ss_return = "/ss/" + ss_id
+            app.logger.info("Screenshot created -> " + url + " " + ss_return)
+            return ss_return
+        else:
+            app.logger.error("Screenshot not working -> " + url)
+            return ""
     except:
-        app.logger.error("Screenshot not working -> " + url + " " + ss_return)
+        app.logger.error("Screenshot not working -> " + url)
 
 def getQueries(name):
     query = {
@@ -773,7 +800,7 @@ def process_single_page(in_data):
 
     # Filter Line.  Put more here.
     if url.endswith(".pdf") or any(map(url.startswith,stop)) or url in bad_urls:
-        app.logger.warn("Skipping.  PDF or in STOP_LIST or in BAD_URLS.")
+        app.logger.warn("Skipping.  PDF or in STOP_LIST or in BAD_URLS. " + url)
         return ()
 
     html = ""
@@ -913,20 +940,20 @@ def new_process(q,name,num_pages=1,language="english"):
         page = getByURL(url["url"],"pages",name)
         if page:
             data = getByURL(url["url"],"texts",name)
-            text = data["text"]
-            tokens = data["tokens"]
+            text = data.get("text","")
+            tokens = data.get("tokens",[])
         pages_and_texts_and_tokens.append((page,text,tokens))
 
 
     # How many threads to process with        
-    pool = Pool(processes=2)
+    pool = Pool(processes=3)
 
     app.logger.info("Processing %d urls" % len(urls))
 
     # Do the thing
     results = pool.map(process_single_page, map(lambda x:(x[0],x[1],name,likes,unlikes,bad_urls,language),zip(urls,pages_and_texts_and_tokens)))
 
-    app.logger.info("Finished %d urls" % len(results))
+    app.logger.info("***** Finished %d urls" % len(results))
 
     pool.close()
     
@@ -964,7 +991,7 @@ def new_process(q,name,num_pages=1,language="english"):
 
     return_data = {"profile":profile,"pages":entries,"treemap":tree_stuff,"meta":meta}
 
-    app.logger.info("Returning Results.")
+    app.logger.info("Returning Results. %d pages." % len(entries))
 
     return return_data
 
