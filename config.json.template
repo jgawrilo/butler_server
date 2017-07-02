@@ -4,5 +4,7 @@
     "port":5000,
     "platform":"MAC",
     "butler_index":"butler",
+    "start_num_pages":1,
+    "silos":[],
     "chrome_loc":"/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome"
 }
