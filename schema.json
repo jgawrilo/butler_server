@@ -49,6 +49,7 @@
             }
     },
     "texts":{
+      "date_detection": false,
       "properties": {
                "name": {
                   "type": "string",
