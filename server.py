@@ -302,9 +302,8 @@ def doNLP(text,likes,unlikes,the_url):
         url = config["nlp_service"] + '/?properties={"annotators": "tokenize,ssplit,pos,ner,depparse,openie"}'
         return_ents, best_return_rels, return_tokens, return_rels = [],[],[],[]
         resp = requests.post(url,data=text,timeout=60)
-        app.logger.info("Finished NLP on -> " + the_url)
-
         data = json.loads(resp.text)
+        app.logger.info("Finished NLP on -> " + the_url)
 
         entities = []
         return_tokens = []
@@ -316,7 +315,7 @@ def doNLP(text,likes,unlikes,the_url):
                     entities.append((token["ner"],token["word"],token["index"]))
 
             for rel in sentence["openie"]:
-                return_rels.append({"id":"other"+hashlib.md5(" ".join([rel["subject"],rel["relation"],rel["object"]])).hexdigest(),"value":" ".join([rel["subject"],rel["relation"],rel["object"]])})
+                return_rels.append({"id":"other"+hashlib.md5(" ".join([rel["subject"],rel["relation"],rel["object"]])).hexdigest(),"value":" ".join([rel["subject"],rel["relation"],rel["object"]]),"type":""})
         
         ent_list = []
         last_type = None
@@ -358,7 +357,7 @@ def doNLP(text,likes,unlikes,the_url):
         #    app.logger.error("Error duing NLP on -> " + the_url)
 
         return return_ents, best_return_rels, return_tokens
-    except:
+    except ValueError:
         app.logger.error("NLP not working -> " + the_url)
         raise Error
 
@@ -462,9 +461,11 @@ def build_profile(entries,likes,unlikes):
         if e["type"] == "social":
             social_dict[e["id"]] = social_dict.get(e["id"],[e["url"],0,None,None])
             social_dict[e["id"]][1] += 1
+            if e["url"].startswith("https://github.com/"):
+                social_dict[e["id"]][3] = e["url"].split("https://github.com/")[1].split("/")[0].strip()
             continue
         for n in e["profile"]["other"]:
-            other_dict[n["id"]] = other_dict.get(n["id"],[n["value"],0,set()])
+            other_dict[n["id"]] = other_dict.get(n["id"],[n["value"],0,set(),n["type"]])
             other_dict[n["id"]][1] += 1
             other_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
         for n in e["profile"]["phone_numbers"]:
@@ -485,7 +486,7 @@ def build_profile(entries,likes,unlikes):
                 names_dict[n["id"]][1] += n["count"]
                 names_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
 
-    main_profile["other"] = sorted([{"id":x,"value":other_dict[x][0],"count":other_dict[x][1],"from":list(map(json.loads,other_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in other_dict],key=lambda x: len(x["from"]),reverse=True)
+    main_profile["other"] = sorted([{"id":x,"type":other_dict[x][3],"value":other_dict[x][0],"count":other_dict[x][1],"from":list(map(json.loads,other_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in other_dict],key=lambda x: len(x["from"]),reverse=True)
     main_profile["phone_numbers"] = sorted([{"id":x,"value":phone_dict[x][0],"count":phone_dict[x][1],"from":list(map(json.loads,phone_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in phone_dict],key=lambda x: len(x["from"]),reverse=True)
     main_profile["addresses"] = sorted([{"id":x,"value":address_dict[x][0],"count":address_dict[x][1],"from":list(map(json.loads,address_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in address_dict],key=lambda x: len(x["from"]),reverse=True)
     main_profile["names"] = sorted([{"id":x,"value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in names_dict],key=lambda x: len(x["from"]),reverse=True)[:3]
@@ -660,7 +661,6 @@ def getScreenShot(url):
         ss_id = hashlib.md5(url).hexdigest() + ".png"
         command = Command(config["chrome_loc"] + ' --headless --disable-gpu --no-sandbox --screenshot ' + url + " && mv screenshot.png ss/" + ss_id)
         code = command.run(timeout=60)
-        #os.system(config["chrome_loc"] + ' --headless --disable-gpu --no-sandbox --screenshot ' + url + " && mv screenshot.png ss/" + ss_id)
         if str(code) == "0":
             ss_return = "/ss/" + ss_id
             app.logger.info("Screenshot created -> " + url + " " + ss_return)
@@ -670,6 +670,124 @@ def getScreenShot(url):
             return ""
     except:
         app.logger.error("Screenshot not working -> " + url)
+
+def process_dark_page(in_data):
+    app.logger.info(in_data)
+    # Split tuple
+    url_obj, page_and_text_and_token, name, likes, unlikes, bad_urls, language = in_data
+    url = url_obj["url"]
+    query = url_obj["q"]
+
+    app.logger.info("** Processing -> " + url)
+
+    # Filter Line.  Put more here.
+    if url.endswith(".pdf") or any(map(url.startswith,stop)) or url in bad_urls:
+        app.logger.warn("Skipping.  PDF or in STOP_LIST or in BAD_URLS.")
+        return ()
+
+    html = ""
+    page = page_and_text_and_token[0]
+    text = page_and_text_and_token[1]
+    all_text = ""
+    readable_text = ""
+    title = ""
+    addresses = []
+    rels = []
+    emails  = []
+    phones = []
+    images = []
+    social = False
+    entities = []
+    tokens = page_and_text_and_token[2]
+    summary = ""
+    
+    # If passed in page, we already processed it.
+    if page:
+        app.logger.info("Page already mined.")
+        # If user unliked page, don't process.  Probably should bash other results as well
+        if page["id"] in unlikes:
+            app.logger.info("Page previously unliked.")
+            return ()
+
+        # Mark page up with like/unlike metadata
+        data = mark_data(page,likes,unlikes)
+        return (data, text, url, page["entities"], tokens)
+
+    # If we get here, it means new page
+
+    try:
+        app.logger.info("Page is new.")
+        all_text,title = text, url_obj["title"]
+        summary, _ = get_text_title(all_text,url)
+        summary = " ".join(summary[:500].split())
+        text = all_text
+        addresses = getAddresses(all_text,likes,unlikes)
+        screenshot_path = "/ss/onion.jpeg"
+        
+        #screenshot_path = getScreenShot(url)
+        entities,other,tokens = doNLP(text,likes,unlikes,url)
+        emails = get_emails(all_text,likes,unlikes,url)
+        phones = getPhoneNumbers(all_text,likes,unlikes,url)
+
+        if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
+            app.logger.warn("Too many of something found.  Adding bad URL -> " + url)
+            nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
+            return ()
+
+        data = build_json(name,url,title,entities,addresses,"dark web",rels,emails,phones,images,other,screenshot_path,summary)
+        data = mark_data(data,likes,unlikes)
+    except:
+        app.logger.warn("Error occurred during processing.  Adding bad URL -> " + url)
+        nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
+        return ()
+
+    app.logger.info({"name":name,"query":query,"time":datetime.now().isoformat(),
+        "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
+    nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
+        "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
+
+    #get_tables(url,i)
+    return (data, text, url, entities, tokens)
+
+def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,language,bad_urls):
+    app.logger.info("Searching dark web for: " + text)
+    text = text.strip()
+    QUERY = 'text:"'+text+'"'
+    DOC_TYPE = ""
+
+    dark_es = Elasticsearch(
+        [url],
+        http_auth=(auth_user, auth_pass),
+        port=443,
+        use_ssl=True,
+        verify_certs=False
+    )
+    app.logger.info(QUERY)
+    res = dark_es.search(index="onions", q=QUERY,size=num_pages*10)
+    size = res['hits']['total']
+    app.logger.info(str(size) + " dark web search results found in index.")
+    results = [{"url":x["_source"].get("url","http://" + x["_source"].get("domain")),"title":x["_source"]["title"],"text":x["_source"]["text"]} for x in res['hits']['hits'] if "url" in x["_source"] or "domain" in x["_source"]]
+    for url in results:
+        page = getByURL(url["url"],"pages",name)
+        tokens = []
+        if page:
+            data = getByURL(url["url"],"texts",name)
+            tokens = data.get("tokens",[])
+        url["page"] = page
+        url["tokens"] = tokens
+    trans_results = map(lambda x:({"url":x["url"],"q":text,"title":x["title"],"text":x["text"]}, (x["page"],x["text"],x["tokens"]), name, likes, unlikes, bad_urls, language), results)
+    # url_obj = {url, q}
+    # page_and_text_and_token = () page,text,tokens
+    # url_obj, page_and_text_and_token, name, likes, unlikes, bad_urls, language = in_data
+    pool = Pool(processes=3)
+
+    # Do the thing
+    #results = map(process_dark_page,trans_results)
+
+    results = pool.map(process_dark_page,trans_results)
+    pool.close()
+    app.logger.info(str(len(results)) + " dark web search results returned from processing.")
+    return results
 
 def getQueries(name):
     query = {
@@ -837,7 +955,7 @@ def process_single_page(in_data):
     if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
         app.logger.info("Page is new.  Page is social media. " + url)
 
-        #screenshot_path = "ss"
+        screenshot_path = "ss"
         screenshot_path = getScreenShot(url)
         data = build_social_json(name,url,"social",screenshot_path)
         data = mark_data(data,likes,unlikes)
@@ -877,6 +995,33 @@ def process_single_page(in_data):
     #get_tables(url,i)
     return (data, text, url, entities, tokens)
 
+def get_likes_to_search(last_results,likes):
+    terms = []
+    data_things = [
+        "names",
+        "emails",
+        "phone_numbers",
+        "addresses",
+        "relationships",
+        "other",
+        "social_media"
+    ]
+
+    if len(last_results["hits"]["hits"]) >= 1:
+        data = last_results["hits"]["hits"][-1]["_source"]["data"]
+        for page in data["pages"]:
+            for entity in page["entities"]:
+                if entity["id"] in likes:
+                    terms.append(entity["value"])
+
+        for thing in data_things:
+            for p in data["profile"][thing]:
+                if p["id"] in likes:
+                    terms.append(entity["value"])
+
+    return terms
+
+
 def getBadURLS(name):
     query = {
         "query": {
@@ -895,7 +1040,7 @@ def new_process(q,name,num_pages=1,language="english"):
         Start of search process
     """
 
-    app.logger.info("** Starting new process ** ")
+    app.logger.info("*** new_process -> " +  " ".join((map(str,[name, q, num_pages, language]))))
 
     # Get likes and unlikes
     likes, unlikes = getLikesUnlikes(name)
@@ -904,6 +1049,8 @@ def new_process(q,name,num_pages=1,language="english"):
     # Need to grab what the user was currently looking at
     last_results = do_reload(name)
     liked_urls = []
+
+    likes_to_search = get_likes_to_search(last_results,likes)
 
     if len(last_results["hits"]["hits"]) >= 1:
         data = last_results["hits"]["hits"][-1]["_source"]["data"]
@@ -918,10 +1065,16 @@ def new_process(q,name,num_pages=1,language="english"):
 
     # mine urls
     urls = get_urls(q,num_pages)
+
+    for like in likes_to_search:
+        app.logger.info("Also searching '%s' as a like." % like)
+        urls = urls + get_urls([like],1)
+
     app.logger.info(str(len(urls)) + " urls found.")
 
     urls = urls + liked_urls
 
+    app.logger.info(str(len(urls)) + " total urls found.")
     
 
     # Get bad urls so we can skip
@@ -944,6 +1097,13 @@ def new_process(q,name,num_pages=1,language="english"):
             tokens = data.get("tokens",[])
         pages_and_texts_and_tokens.append((page,text,tokens))
 
+    dark_results = []
+    for silo in config.get("silos",[]):
+        if silo["name"] == "Dark Web":
+            dr = dark_search(silo["es_url"],silo["auth_user"],silo["auth_pass"],q[0],likes, unlikes, name, num_pages, language, bad_urls)
+            dark_results = dr
+    app.logger.info(str(len(dark_results)))
+
 
     # How many threads to process with        
     pool = Pool(processes=3)
@@ -952,6 +1112,8 @@ def new_process(q,name,num_pages=1,language="english"):
 
     # Do the thing
     results = pool.map(process_single_page, map(lambda x:(x[0],x[1],name,likes,unlikes,bad_urls,language),zip(urls,pages_and_texts_and_tokens)))
+
+    results = results + dark_results
 
     app.logger.info("***** Finished %d urls" % len(results))
 
@@ -1009,7 +1171,7 @@ def handle_search():
     q = request.args.get("q")
     name = request.args.get("name")
     language = request.args.get("language")
-    num_pages = int(request.args.get("n",1))
+    num_pages = int(request.args.get("n",config["start_num_pages"]))
 
     app.logger.info("*** Search -> " +  " ".join((map(str,[name, q, num_pages, language]))))
 
