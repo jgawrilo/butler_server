@@ -28,6 +28,9 @@ import os
 from multiprocessing import Process, Pool
 import logging
 import string
+import custom_extractors
+import langdetect
+import pandas as pd
 
 import subprocess, threading
 
@@ -74,6 +77,11 @@ resp.headers['Access-Control-Allow-Origin'] = '*'
 regex = re.compile(("([a-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+\/=?^_`"
                     "{|}~-]+)*(@|\sat\s)(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(\.|"
                     "\sdot\s))+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)"))
+
+custom_extractors_list = [
+    {"site":"Crunchbase","url_starts_with":"https://www.crunchbase.com/organization/"},
+    {"site":"Intelius","url_starts_with":"https://www.intelius.com/people/"}
+]
 
 # Social Sites
 social_mappings = [
@@ -243,6 +251,27 @@ def filterRels(texts,entities):
     return new_texts
 
 
+def get_table_rels(url,html):
+    app.logger.info("Tables are being called.")
+    rels = []
+    try:
+        tables = pd.read_html(html)
+        app.logger.info("Tables are being processed.")
+        for table in tables:
+            app.logger.info("{} tables found.".format(len(table.columns)))
+            if len(table.columns) == 2:
+                for i in range(len(table)):
+                    # {"subject":rel["subject"], "object":rel["object"], "id":"other"+hashlib.md5(" ".join([rel["subject"],rel["relation"],rel["object"]])).hexdigest(),"value":" ".join([rel["subject"],rel["relation"],rel["object"]]),"type":""}
+                    rels.append({"subject":str(table.ix[i][0]), "object":str(table.ix[i][1]), "id":"other"+hashlib.md5(" ".join([str(table.ix[i][0]),":",str(table.ix[i][1])])).hexdigest(),"value":" ".join([str(table.ix[i][1])]),"type":str(table.ix[i][0])})
+            else:
+                pass
+                # each column is a relationship
+        return rels
+    except ValueError:
+        app.logger.error("ISSUE with tables.")
+        return rels
+
+
 def get_tables(url,i):
     tp = HTMLTableParser()
     tables = tp.parse_url(url)
@@ -298,7 +327,6 @@ def get_readability_text(html,url):
 def doNLP(text,likes,unlikes,the_url):
     try:
         app.logger.info("Starting NLP on -> " + the_url)
-
         url = config["nlp_service"] + '/?properties={"annotators": "tokenize,ssplit,pos,ner,depparse,openie"}'
         return_ents, best_return_rels, return_tokens, return_rels = [],[],[],[]
         resp = requests.post(url,data=text,timeout=60)
@@ -315,7 +343,7 @@ def doNLP(text,likes,unlikes,the_url):
                     entities.append((token["ner"],token["word"],token["index"]))
 
             for rel in sentence["openie"]:
-                return_rels.append({"id":"other"+hashlib.md5(" ".join([rel["subject"],rel["relation"],rel["object"]])).hexdigest(),"value":" ".join([rel["subject"],rel["relation"],rel["object"]]),"type":""})
+                return_rels.append({"subject":rel["subject"], "object":rel["object"], "id":"other"+hashlib.md5(" ".join([rel["subject"],rel["relation"],rel["object"]])).hexdigest(),"value":" ".join([rel["subject"],rel["relation"],rel["object"]]),"type":""})
         
         ent_list = []
         last_type = None
@@ -344,10 +372,15 @@ def doNLP(text,likes,unlikes,the_url):
         best_return_rels = []
         for rel in return_rels:
             add = False
+            '''
             for e in entity_set:
                 if e in rel["value"].upper():
                     add = True
                     break
+            '''
+            if rel["subject"].upper() in entity_set and rel["object"].upper() in entity_set:
+                add = True
+
             if add:
                 best_return_rels.append(rel)
 
@@ -387,13 +420,16 @@ def is_float(s):
         return  False
 
 def build_social_json(name, url,ptype,screenshot_path):
+    html = get_html(url)
+    all_text,title = get_text_title(html,url)
     pid = "page_" + hashlib.md5(url).hexdigest()
     data = {
         "name":name,
         "url":url,
         "screenshot_path":screenshot_path,
+        "lang":"",
         "id":pid,
-        "title":None,
+        "title":title,
         "summary":None,
         "profile":{
             "names":[],
@@ -412,11 +448,12 @@ def build_social_json(name, url,ptype,screenshot_path):
     nes.index(index=config["butler_index"], doc_type="pages",body=data,id=pid)
     return data
 
-def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images,other,screenshot_path,summary):
+def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images,other,screenshot_path,summary,lang):
     pid = "page_" + hashlib.md5(url).hexdigest()
     data = {
         "name":name,
         "url":url,
+        "lang":lang,
         "screenshot_path":screenshot_path,
         "id":pid,
         "title":title,
@@ -659,17 +696,20 @@ def getByURL(url, dtype, name):
 def getScreenShot(url):
     try:
         ss_id = hashlib.md5(url).hexdigest() + ".png"
-        command = Command(config["chrome_loc"] + ' --headless --disable-gpu --no-sandbox --screenshot ' + url + " && mv screenshot.png ss/" + ss_id)
+        command = Command("(" + config["chrome_loc"] + ' --headless --disable-gpu --no-sandbox --screenshot ' + url + "; mv screenshot.png ss/" + ss_id + ") &")
         code = command.run(timeout=60)
         if str(code) == "0":
             ss_return = "/ss/" + ss_id
             app.logger.info("Screenshot created -> " + url + " " + ss_return)
             return ss_return
         else:
+            ss_return = "/ss/" + ss_id
             app.logger.error("Screenshot not working -> " + url)
-            return ""
+            return ss_return
     except:
         app.logger.error("Screenshot not working -> " + url)
+        ss_return = "/ss/" + ss_id
+        return ss_return
 
 def process_dark_page(in_data):
     app.logger.info(in_data)
@@ -724,17 +764,20 @@ def process_dark_page(in_data):
         addresses = getAddresses(all_text,likes,unlikes)
         screenshot_path = "/ss/onion.jpeg"
         
-        #screenshot_path = getScreenShot(url)
         entities,other,tokens = doNLP(text,likes,unlikes,url)
         emails = get_emails(all_text,likes,unlikes,url)
         phones = getPhoneNumbers(all_text,likes,unlikes,url)
+
+        table_rels = get_table_rels(url,html)
+        other.extend(table_rels)
 
         if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
             app.logger.warn("Too many of something found.  Adding bad URL -> " + url)
             nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
             return ()
 
-        data = build_json(name,url,title,entities,addresses,"dark web",rels,emails,phones,images,other,screenshot_path,summary)
+        lang = ""
+        data = build_json(name,url,title,entities,addresses,"dark web",rels,emails,phones,images,other,screenshot_path,summary,lang)
         data = mark_data(data,likes,unlikes)
     except:
         app.logger.warn("Error occurred during processing.  Adding bad URL -> " + url)
@@ -747,6 +790,7 @@ def process_dark_page(in_data):
         "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
 
     #get_tables(url,i)
+    app.logger.warn("Returning back correctly!!" + url)
     return (data, text, url, entities, tokens)
 
 def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,language,bad_urls):
@@ -779,7 +823,7 @@ def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,langua
     # url_obj = {url, q}
     # page_and_text_and_token = () page,text,tokens
     # url_obj, page_and_text_and_token, name, likes, unlikes, bad_urls, language = in_data
-    pool = Pool(processes=3)
+    pool = Pool(processes=8)
 
     # Do the thing
     #results = map(process_dark_page,trans_results)
@@ -955,12 +999,46 @@ def process_single_page(in_data):
     if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
         app.logger.info("Page is new.  Page is social media. " + url)
 
-        screenshot_path = "ss"
         screenshot_path = getScreenShot(url)
         data = build_social_json(name,url,"social",screenshot_path)
         data = mark_data(data,likes,unlikes)
 
-    # Page is NOT social media and NOT alredy mined.
+    # Page is NOT social media and NOT alredy mined AND custom extractor for it.
+    elif any(map(url.startswith,map(lambda x: x["url_starts_with"],custom_extractors_list))):
+        try:
+            app.logger.info("Page is new. " + url)
+            html = get_html(url)
+            all_text,title = get_text_title(html,url)
+            readable_text = get_readability_text(html,url)
+            summary, _ = get_text_title(readable_text,url)
+            summary = " ".join(summary[:500].split())
+            text = all_text
+            addresses = getAddresses(all_text,likes,unlikes)
+            screenshot_path = getScreenShot(url)
+            entities,other,tokens = doNLP(text,likes,unlikes,url)
+
+            if url.startswith("https://www.crunchbase.com/organization/"):
+                other.extend(custom_extractors.get_crunchbase_data(url))
+            if url.startswith("https://www.intelius.com/people/"):
+                other.extend(custom_extractors.get_intelius_data(url))
+            
+
+            emails = get_emails(all_text,likes,unlikes,url)
+            phones = getPhoneNumbers(all_text,likes,unlikes,url)
+
+            if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
+                app.logger.warn("Too many of something found.  Adding bad URL -> " + url)
+                nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
+                return ()
+
+            lang = ""
+            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path,summary,lang)
+            data = mark_data(data,likes,unlikes)
+        except:
+            app.logger.error("Error occurred during processing.  Adding bad URL -> " + url)
+            nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
+            return ()
+
     else:
         try:
             app.logger.info("Page is new. " + url)
@@ -971,20 +1049,27 @@ def process_single_page(in_data):
             summary = " ".join(summary[:500].split())
             text = all_text
             addresses = getAddresses(all_text,likes,unlikes)
-            #screenshot_path = "ss"
             screenshot_path = getScreenShot(url)
             entities,other,tokens = doNLP(text,likes,unlikes,url)
             emails = get_emails(all_text,likes,unlikes,url)
             phones = getPhoneNumbers(all_text,likes,unlikes,url)
+            lang = ""
+            table_rels = get_table_rels(url,html)
+
+            other.extend(table_rels)
+
+            if text.strip():
+                #lang = langdetect.detect(text.strip())
+                app.logger.info("language is {}".format(lang))
 
             if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
                 app.logger.warn("Too many of something found.  Adding bad URL -> " + url)
                 nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
                 return ()
 
-            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path,summary)
+            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path,summary,lang)
             data = mark_data(data,likes,unlikes)
-        except:
+        except ValueError:
             app.logger.warn("Error occurred during processing.  Adding bad URL -> " + url)
             nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
             return ()
@@ -993,6 +1078,7 @@ def process_single_page(in_data):
         "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
 
     #get_tables(url,i)
+    app.logger.warn("Returning back correctly!!" + url)
     return (data, text, url, entities, tokens)
 
 def get_likes_to_search(last_results,likes):
@@ -1017,7 +1103,11 @@ def get_likes_to_search(last_results,likes):
         for thing in data_things:
             for p in data["profile"][thing]:
                 if p["id"] in likes:
-                    terms.append(entity["value"])
+                    if thing != "social_media":
+                        terms.append(p["value"])
+                    else:
+                        if p["username"]:
+                            terms.append(p["username"])
 
     return terms
 
@@ -1093,8 +1183,11 @@ def new_process(q,name,num_pages=1,language="english"):
         page = getByURL(url["url"],"pages",name)
         if page:
             data = getByURL(url["url"],"texts",name)
-            text = data.get("text","")
-            tokens = data.get("tokens",[])
+            if data:
+                text = data.get("text","")
+                tokens = data.get("tokens",[])
+            else:
+                page = None
         pages_and_texts_and_tokens.append((page,text,tokens))
 
     dark_results = []
@@ -1106,7 +1199,7 @@ def new_process(q,name,num_pages=1,language="english"):
 
 
     # How many threads to process with        
-    pool = Pool(processes=3)
+    pool = Pool(processes=8)
 
     app.logger.info("Processing %d urls" % len(urls))
 
@@ -1160,7 +1253,11 @@ def new_process(q,name,num_pages=1,language="english"):
 
 @app.route('/ss/<path:path>')
 def send_js(path):
-    return send_from_directory('ss', path)
+    app.logger.info("PATH" + path)
+    if os.path.isfile(os.path.join('ss',path)):
+        return send_from_directory('ss', path)
+    else:
+        return send_from_directory('ss', "loading.png")
 
 # Called when twitter is scraped...
 @app.route('/search/', methods=['GET'])
