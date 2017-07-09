@@ -133,7 +133,7 @@ def getPhoneNumbers(text,likes,unlikes,url):
             pid = "phone" + hashlib.md5(match).hexdigest()
             if pid not in unlikes:
                 phones.append({"id":pid,"value":match})
-    except Error:
+    except:
         app.logger.error("Couldn't get phones -> " +url)
 
     return phones
@@ -145,7 +145,7 @@ def get_emails(text,likes,unlikes,url):
             eid = "email"+hashlib.md5(email).hexdigest()
             if eid not in unlikes:
                 ret.append({"id":eid,"value":email})
-    except Error:
+    except:
         app.logger.error("Couldn't get emails -> " +url)
     return ret
 
@@ -233,7 +233,7 @@ def getAddresses(text,likes,unlikes):
         addresses = pyap.parse(text, country='US')
         addresses = map(lambda x: " ".join(str(x).upper().split()),addresses)
         return filter(lambda x: x["id"] not in unlikes, map(lambda x: {"id":"address"+hashlib.md5(x).hexdigest(),"value":x},addresses))
-    except Error:
+    except:
         app.logger.error("Couldn't get addresses.")
 
 def filterRels(texts,entities):
@@ -390,9 +390,9 @@ def doNLP(text,likes,unlikes,the_url):
         #    app.logger.error("Error duing NLP on -> " + the_url)
 
         return return_ents, best_return_rels, return_tokens
-    except ValueError:
+    except:
         app.logger.error("NLP not working -> " + the_url)
-        raise Error
+        return [],[],[] 
 
 
 def get_urls(terms,num_pages=1):
@@ -823,7 +823,7 @@ def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,langua
     # url_obj = {url, q}
     # page_and_text_and_token = () page,text,tokens
     # url_obj, page_and_text_and_token, name, likes, unlikes, bad_urls, language = in_data
-    pool = Pool(processes=8)
+    pool = Pool(processes=4)
 
     # Do the thing
     #results = map(process_dark_page,trans_results)
@@ -1069,7 +1069,7 @@ def process_single_page(in_data):
 
             data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path,summary,lang)
             data = mark_data(data,likes,unlikes)
-        except ValueError:
+        except:
             app.logger.warn("Error occurred during processing.  Adding bad URL -> " + url)
             nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
             return ()
@@ -1199,7 +1199,7 @@ def new_process(q,name,num_pages=1,language="english"):
 
 
     # How many threads to process with        
-    pool = Pool(processes=8)
+    pool = Pool(processes=4)
 
     app.logger.info("Processing %d urls" % len(urls))
 
