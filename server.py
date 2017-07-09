@@ -258,33 +258,22 @@ def filterRels(texts,entities):
 
 
 def get_table_rels(url,html):
-    app.logger.info("Tables are being called.")
+    app.logger.info("Tables are being called: " + url)
     rels = []
     try:
         tables = pd.read_html(html)
-        app.logger.info("Tables are being processed.")
         for table in tables:
-            app.logger.info("{} tables found.".format(len(table.columns)))
+            app.logger.info("{} tables found. ".format(len(table.columns)) + url)
             if len(table.columns) == 2:
                 for i in range(len(table)):
-                    # {"subject":rel["subject"], "object":rel["object"], "id":"other"+hashlib.md5(" ".join([rel["subject"],rel["relation"],rel["object"]])).hexdigest(),"value":" ".join([rel["subject"],rel["relation"],rel["object"]]),"type":""}
                     rels.append({"subject":str(table.ix[i][0]), "object":str(table.ix[i][1]), "id":"other"+hashlib.md5(" ".join([str(table.ix[i][0]),":",str(table.ix[i][1])])).hexdigest(),"value":" ".join([str(table.ix[i][1])]),"type":str(table.ix[i][0])})
             else:
                 pass
                 # each column is a relationship
         return rels
-    except ValueError:
-        app.logger.error("ISSUE with tables.")
+    except:
+        app.logger.error("Error with tables: " + url)
         return rels
-
-
-def get_tables(url,i):
-    tp = HTMLTableParser()
-    tables = tp.parse_url(url)
-    for j, table in enumerate(tables):
-        if table is not None:
-            table.applymap(lambda x:x.strip().replace("\t"," ") if type(x) == str else x)
-            table.to_csv("data/" + str(i) + "_"+ str(j) + ".csv",header=True,sep="\t")
 
 def get_html(url):
     try:
@@ -298,7 +287,7 @@ def get_html(url):
         return html
     except:
         app.logger.error("Error getting HTML for -> " + url)
-        raise
+        return ""
 
 def get_images(url):
     result = haul.find_images(url)
@@ -481,6 +470,41 @@ def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images
     nes.index(index=config["butler_index"], doc_type="pages", body=data, id=pid)
     return data
 
+"""
+social_mappings = [
+        {"site":"Google","urls":["https://plus.google.com/"]},
+        {"site":"LinkedIn","urls":["https://www.linkedin.com/"]},
+        {"site":"Instagram","urls":["https://www.instagram.com/"],"left_split":"https://www.instagram.com/",
+        "profile_class":"_79dar","image_class":"_iv4d5"},
+        {"site":"Github","urls":["https://github.com/"],"left_split":"https://github.com/"},
+        {"site":"Pinterest","urls":["https://www.pinterest.com/"],"left_split":"https://www.pinterest.com/"},
+        {"site":"Facebook","urls":["https://www.facebook.com/"], "left_split":"https://www.facebook.com/"},
+        {"site":"Twitter","urls":["https://twitter.com/"],"left_split":"https://twitter.com/"},
+        {"site":"YouTube","urls":["https://www.youtube.com"],"left_split":"https://twitter.com/"}
+    ]
+"""
+
+def getUserName(url):
+    try:
+        if url.startswith("https://github.com/"):
+            return url.split("https://github.com/")[1].split("/")[0].strip()
+        elif url.startswith("https://plus.google.com/"):
+            return url.split("https://plus.google.com/")[1].split("/")[0].strip()
+        elif url.startswith("https://www.linkedin.com/"):
+            return url.split("https://www.linkedin.com/in/")[1].split("/")[0].strip()
+        elif url.startswith("https://www.instagram.com/"):
+            return url.split("https://www.instagram.com/")[1].split("/")[0].strip()
+        elif url.startswith("https://www.pinterest.com/"):
+            return url.split("https://www.pinterest.com/")[1].split("/")[0].strip()
+        elif url.startswith("https://www.facebook.com/"):
+            return url.split("https://www.facebook.com/public/")[1].split("/")[0].strip()
+        elif url.startswith("https://twitter.com/"):
+            return url.split("https://twitter.com/")[1].split("/")[0].split("?")[0].strip()
+        elif url.startswith("https://www.youtube.com/"):
+            return url.split("https://www.youtube.com/channel/")[1].split("/")[0].strip()
+    except:
+        return ""
+
 def build_profile(entries,likes,unlikes):
     main_profile = {
             "names":[],
@@ -504,8 +528,7 @@ def build_profile(entries,likes,unlikes):
         if e["type"] == "social":
             social_dict[e["id"]] = social_dict.get(e["id"],[e["url"],0,None,None])
             social_dict[e["id"]][1] += 1
-            if e["url"].startswith("https://github.com/"):
-                social_dict[e["id"]][3] = e["url"].split("https://github.com/")[1].split("/")[0].strip()
+            social_dict[e["id"]][3] = getUserName(e["url"])
             continue
         for n in e["profile"]["other"]:
             other_dict[n["id"]] = other_dict.get(n["id"],[n["value"],0,set(),n["type"]])
@@ -534,7 +557,7 @@ def build_profile(entries,likes,unlikes):
     main_profile["addresses"] = sorted([{"id":x,"value":address_dict[x][0],"count":address_dict[x][1],"from":list(map(json.loads,address_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in address_dict],key=lambda x: len(x["from"]),reverse=True)
     main_profile["names"] = sorted([{"id":x,"value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in names_dict],key=lambda x: len(x["from"]),reverse=True)[:3]
     main_profile["emails"] = sorted([{"id":x,"value":email_dict[x][0],"count":email_dict[x][1],"from":list(map(json.loads, email_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in email_dict],key=lambda x: len(x["from"]),reverse=True)
-    main_profile["relationships"] = sorted([{"id":x,"type":"connection","value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in names_dict],key=lambda x: len(x["from"]),reverse=True)[3:]
+    main_profile["relationships"] = sorted([{"id":x,"type":"","value":names_dict[x][0],"count":names_dict[x][1],"from":list(map(json.loads, names_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in names_dict],key=lambda x: len(x["from"]),reverse=True)[3:]
     main_profile["social_media"] = sorted([{"id":x,"url":social_dict[x][0],"count":social_dict[x][1],"profile_url":social_dict[x][2],"username":social_dict[x][3], "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in social_dict],key=lambda x: x["count"],reverse=True)
     
     return main_profile
@@ -544,7 +567,7 @@ def build_profile(entries,likes,unlikes):
 @app.route('/name/', methods=['GET'])
 def handle_name():
     name = request.args.get("name")
-    app.logger.info("*** Name -> " + name)
+    app.logger.info("*** Name -> " + str(name))
     nes.index(index=config["butler_index"], doc_type="searches",body={"name":name},id=name)
     return resp
 
@@ -553,7 +576,7 @@ def handle_name():
 def handle_unlike():
     name = request.args.get("name")
     uid = request.args.get("id")
-    print "GET: Unlike", name, uid
+    app.logger.info("GET: Unlike " + str(name) + " " + str(uid))
     nes.index(index=config["butler_index"], doc_type="unlikes",body={"name":name,"time":datetime.now().isoformat(),"id":uid})
     return resp
 
@@ -562,7 +585,7 @@ def handle_unlike():
 def handle_like():
     name = request.args.get("name")
     lid = request.args.get("id")
-    print "GET: Like", name, lid
+    app.logger.info("GET: Like " + str(name) + " " + str(lid))
     nes.index(index=config["butler_index"], doc_type="likes",body={"name":name,"time":datetime.now().isoformat(),"id":lid})
     return resp
 
@@ -570,11 +593,6 @@ def handle_like():
 @app.route('/clear/', methods=['GET'])
 def handle_clear():
     name = request.args.get("name")
-    print "GET: Clear", name
-    #qs = getQueries(name)
-    #q, num_pages = qs[-1]
-    #return_data = process_search([q],name,num_pages)
-    #nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
     return resp
 
 @app.route('/get_searches/',methods=['GET'])
@@ -609,31 +627,19 @@ def do_reload(name):
 @app.route('/reload/', methods=['GET'])
 def handle_reload():    
     name = request.args.get("name")
-    print "GET: Reload", name
+    app.logger.info("GET: Reload " + name)
+
     qs = getQueries(name)
+
     if not qs:
         resp = Response(json.dumps({"success":True,"message":"Please start a search."}))
         resp.headers['Access-Control-Allow-Origin'] = '*'
         return resp
+
     q, num_pages, language = qs[-1]
     likes,unlikes = getLikesUnlikes(name)
-    new_searches = []
-    results = do_reload(name)
-    if len(results["hits"]["hits"]) >= 1:
-        data = results["hits"]["hits"][-1]["_source"]["data"]
-        for p in data["profile"]["names"] + data["profile"]["phone_numbers"] + data["profile"]["emails"] \
-            + data["profile"]["addresses"] + data["profile"]["other"]:
-            if p["id"] in likes:
-                pass
-                #new_searches.append(p["value"])
-        for p in data["pages"]:
-            for e in p["entities"]:
-                if e["id"] in likes:
-                    pass
-                    #new_searches.append(e["value"])
-
     queries = [q] + new_searches
-    return_data = new_process(queries,name,num_pages,language)
+    return_data = new_process([q],name,num_pages,language)
     resp = Response(json.dumps(return_data,indent=2))
     nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
@@ -643,40 +649,15 @@ def handle_reload():
 @app.route('/save_export/', methods=['GET'])
 def handle_save():
     name = request.args.get("name")
-    print "GET: Save/Export ->", name
-    #qs = getQueries(name)
-    #q, num_pages = qs[-1]
-    #return_data = process_search([q],name,num_pages)
-    #nes.index(index="butler", doc_type="results",body={"name":name,"query":q,"data":return_data},id=name)
     return resp
 
 @app.route('/crunch/',methods=['GET'])
 def handle_crunch():
     name = request.args.get("name")
-    print "GET: Crunch ->", name
+    app.logger.info("GET: Crunch -> " + name)
     qs = getQueries(name)
     q, num_pages,language = qs[-1]
-    likes,unlikes = getLikesUnlikes(name)
-    print likes
-    new_searches = []
-    results = do_reload(name)
-    if len(results["hits"]["hits"]) >= 1:
-        data = results["hits"]["hits"][-1]["_source"]["data"]
-        for p in data["profile"]["names"] + data["profile"]["phone_numbers"] + data["profile"]["emails"] \
-            + data["profile"]["addresses"] + data["profile"]["other"]:
-            if p["id"] in likes:
-                pass
-                #new_searches.append(p["value"])
-        for p in data["pages"]:
-            for e in p["entities"]:
-                if e["id"] in likes:
-                    pass
-                    #new_searches.append(e["value"])
-
-    queries = [q] + new_searches
-
-    print queries
-    return_data = new_process(queries,name,num_pages,language)
+    return_data = new_process([q],name,num_pages,language)
     resp = Response(json.dumps(return_data,indent=2))
     nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
     resp.headers['Access-Control-Allow-Origin'] = '*'
@@ -879,10 +860,9 @@ def getLikesUnlikes(name):
 @app.route('/previous/', methods=['GET'])
 def handle_previous():
     name = request.args.get("name")
-    print "GET: Previous ->", name
+    app.logger.info("GET: Previous -> " + name)
     qs = getQueries(name)
     q, num_pages,language = qs[-1]
-    print q, num_pages, language
     num_pages -= 1
     if num_pages == 0:
         num_pages = 1
@@ -896,10 +876,9 @@ def handle_previous():
 @app.route('/next/', methods=['GET'])
 def handle_next():
     name = request.args.get("name")
-    print "GET: Next ->", name
+    app.logger.info("GET: Next -> " + name)
     qs = getQueries(name)
     q, num_pages, language = qs[-1]
-    print q, num_pages
     num_pages += 1
     return_data = new_process([q],name,num_pages,language)
     resp = Response(json.dumps(return_data,indent=2))
@@ -1166,9 +1145,13 @@ def new_process(q,name,num_pages=1,language="english"):
     # mine urls
     urls = get_urls(q,num_pages)
 
-    for like in likes_to_search:
-        app.logger.info("Also searching '%s' as a like." % like)
-        urls = urls + get_urls([like],1)
+    #for like in likes_to_search:
+    #    app.logger.info("Also searching '%s' as a like." % like)
+    #    urls = urls + get_urls([like + q[0]],1)
+
+    if likes_to_search:
+        app.logger.info("Also searching '%s' as a like." % " ".join(likes_to_search))
+        urls = urls + get_urls([" ".join(likes_to_search) + " " + q[0]],1)
 
     app.logger.info(str(len(urls)) + " urls found.")
 
@@ -1294,6 +1277,5 @@ def handle_search():
 
 if __name__ == "__main__":
     app.debug = True
-    print "Running..."
     app.run(host="0.0.0.0",port=config["port"])
 
