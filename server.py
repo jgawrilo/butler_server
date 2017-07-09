@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-
+import traceback
 import requests
 from bs4 import BeautifulSoup
+from collections import defaultdict
 import re
 import nltk
 import sys
@@ -57,7 +58,7 @@ reload(sys)
 sys.setdefaultencoding('utf8')
 
 config = json.load(open("config.json"))
-nes = Elasticsearch([config["es"]])
+nes = Elasticsearch([config["es"]],timeout=60)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'kyc_butler'
@@ -180,11 +181,16 @@ def doLDA(docu,level,last_count,top_text):
     texts = [[word.lower() for word in document if word.lower() not in stoplist.union(punctuation) and not is_float(word)]
              for document in documents]
 
+    frequency = defaultdict(int)
+    for text in texts:
+        for token in text:
+            frequency[token] += 1
+    texts = [[token for token in text if frequency[token] > 1] for text in texts]
 
     dictionary = corpora.Dictionary(texts)
     corpus = [dictionary.doc2bow(text) for text in texts]
-    tfidf = TfidfModel(corpus)
-    hdp = HdpModel(tfidf[corpus],dictionary,random_state=7)
+    #tfidf = TfidfModel(corpus)
+    hdp = HdpModel(corpus,dictionary,random_state=7)
     lda = hdp.suggested_lda_model()
 
     topic_answers_dict = {"count":len(docu),"summary":None,"title":top_text,"url":None,"level":level,"children":[],"node_id":last_count,"type":"cluster"}
@@ -1074,11 +1080,15 @@ def process_single_page(in_data):
             nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
             return ()
 
-    nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
+    app.logger.info("Trying to index:" + url)
+    try:
+        nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
         "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
-
+    except:
+        raise Exception("".join(traceback.format_exception(*sys.exc_info())))
+    app.logger.info("Indexed!" + url)
     #get_tables(url,i)
-    app.logger.warn("Returning back correctly!!" + url)
+    app.logger.info("Returning back correctly!!" + url)
     return (data, text, url, entities, tokens)
 
 def get_likes_to_search(last_results,likes):
@@ -1204,8 +1214,10 @@ def new_process(q,name,num_pages=1,language="english"):
     app.logger.info("Processing %d urls" % len(urls))
 
     # Do the thing
-    results = pool.map(process_single_page, map(lambda x:(x[0],x[1],name,likes,unlikes,bad_urls,language),zip(urls,pages_and_texts_and_tokens)))
-
+    try:
+        results = pool.map(process_single_page, map(lambda x:(x[0],x[1],name,likes,unlikes,bad_urls,language),zip(urls,pages_and_texts_and_tokens)))
+    except:
+        raise Exception("".join(traceback.format_exception(*sys.exc_info())))
     results = results + dark_results
 
     app.logger.info("***** Finished %d urls" % len(results))
