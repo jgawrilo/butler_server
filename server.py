@@ -638,7 +638,6 @@ def handle_reload():
 
     q, num_pages, language = qs[-1]
     likes,unlikes = getLikesUnlikes(name)
-    queries = [q] + new_searches
     return_data = new_process([q],name,num_pages,language)
     resp = Response(json.dumps(return_data,indent=2))
     nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
