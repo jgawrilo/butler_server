@@ -58,7 +58,7 @@ reload(sys)
 sys.setdefaultencoding('utf8')
 
 config = json.load(open("config.json"))
-nes = Elasticsearch([config["es"]],timeout=60)
+nes = Elasticsearch([config["es"]])
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'kyc_butler'
@@ -772,9 +772,12 @@ def process_dark_page(in_data):
 
     app.logger.info({"name":name,"query":query,"time":datetime.now().isoformat(),
         "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
-    nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
+    try:
+        nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
         "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
-
+    except:
+        app.logger.error("ES Indexig Issue!!" + url)
+        return ()
     #get_tables(url,i)
     app.logger.warn("Returning back correctly!!" + url)
     return (data, text, url, entities, tokens)
@@ -802,7 +805,8 @@ def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,langua
         tokens = []
         if page:
             data = getByURL(url["url"],"texts",name)
-            tokens = data.get("tokens",[])
+            if data:
+                tokens = data.get("tokens",[])
         url["page"] = page
         url["tokens"] = tokens
     trans_results = map(lambda x:({"url":x["url"],"q":text,"title":x["title"],"text":x["text"]}, (x["page"],x["text"],x["tokens"]), name, likes, unlikes, bad_urls, language), results)
@@ -1063,7 +1067,8 @@ def process_single_page(in_data):
         nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
         "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
     except:
-        raise Exception("".join(traceback.format_exception(*sys.exc_info())))
+        app.logger.info("ES Indexing Issue -> " + url)
+        return ()
     app.logger.info("Indexed!" + url)
     #get_tables(url,i)
     app.logger.info("Returning back correctly!!" + url)
