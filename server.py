@@ -638,7 +638,6 @@ def handle_reload():
 
     q, num_pages, language = qs[-1]
     likes,unlikes = getLikesUnlikes(name)
-    queries = [q] + new_searches
     return_data = new_process([q],name,num_pages,language)
     resp = Response(json.dumps(return_data,indent=2))
     nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
@@ -650,6 +649,99 @@ def handle_reload():
 def handle_save():
     name = request.args.get("name")
     return resp
+
+@app.route('/test_url/', methods=['GET'])
+def handle_test_url():
+    url = request.args.get("url")
+    bad_urls = []
+    name = "TEST"
+
+    # Filter Line.  Put more here.
+    if url.endswith(".pdf") or any(map(url.startswith,stop)) or url in bad_urls:
+        return Response(json.dumps({}))
+
+    html = ""
+    page = None
+    text = ""
+    all_text = ""
+    readable_text = ""
+    title = ""
+    addresses = []
+    rels = []
+    emails  = []
+    phones = []
+    images = []
+    social = False
+    entities = []
+    tokens = []
+    summary = ""
+    likes,unlikes = [],[]
+
+    # If we get here, it means new page
+
+    # If page is social media
+    if any(map(url.startswith,map(lambda x: x["urls"][0],social_mappings))):
+        screenshot_path = getScreenShot(url)
+        data = build_social_json(name,url,"social",screenshot_path)
+        return Response(json.dumps(data,indent=2))
+
+    # Page is NOT social media and NOT alredy mined AND custom extractor for it.
+    elif any(map(url.startswith,map(lambda x: x["url_starts_with"],custom_extractors_list))):
+        try:
+            html = get_html(url)
+            all_text,title = get_text_title(html,url)
+            readable_text = get_readability_text(html,url)
+            summary, _ = get_text_title(readable_text,url)
+            summary = " ".join(summary[:500].split())
+            text = all_text
+            addresses = getAddresses(all_text,likes,unlikes)
+            screenshot_path = getScreenShot(url)
+            entities,other,tokens = doNLP(text,likes,unlikes,url)
+
+            if url.startswith("https://www.crunchbase.com/organization/"):
+                other.extend(custom_extractors.get_crunchbase_data(url))
+            if url.startswith("https://www.intelius.com/people/"):
+                other.extend(custom_extractors.get_intelius_data(url))
+            
+            emails = get_emails(all_text,likes,unlikes,url)
+            phones = getPhoneNumbers(all_text,likes,unlikes,url)
+
+            if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
+                return ()
+
+            lang = ""
+            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path,summary,lang)
+            return Response(json.dumps(data,indent=2))
+        except:
+            return Response(json.dumps({}))
+
+    else:
+        try:
+            html = get_html(url)
+            all_text,title = get_text_title(html,url)
+            readable_text = get_readability_text(html,url)
+            summary, _ = get_text_title(readable_text,url)
+            summary = " ".join(summary[:500].split())
+            text = all_text
+            addresses = getAddresses(all_text,likes,unlikes)
+            screenshot_path = getScreenShot(url)
+            entities,other,tokens = doNLP(text,likes,unlikes,url)
+            emails = get_emails(all_text,likes,unlikes,url)
+            phones = getPhoneNumbers(all_text,likes,unlikes,url)
+            lang = ""
+            table_rels = get_table_rels(url,html)
+
+            other.extend(table_rels)
+
+            if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
+                return Response(json.dumps({}))
+
+            data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path,summary,lang)
+            return Response(json.dumps(data,indent=2))
+        except:
+            return Response(json.dumps({}))
+
+    return Response(json.dumps({}))
 
 @app.route('/crunch/',methods=['GET'])
 def handle_crunch():
@@ -810,7 +902,7 @@ def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,langua
     # url_obj = {url, q}
     # page_and_text_and_token = () page,text,tokens
     # url_obj, page_and_text_and_token, name, likes, unlikes, bad_urls, language = in_data
-    pool = Pool(processes=4)
+    pool = Pool(processes=config["page_threads"])
 
     # Do the thing
     #results = map(process_dark_page,trans_results)
@@ -1192,7 +1284,7 @@ def new_process(q,name,num_pages=1,language="english"):
 
 
     # How many threads to process with        
-    pool = Pool(processes=4)
+    pool = Pool(processes=config["page_threads"])
 
     app.logger.info("Processing %d urls" % len(urls))
 
