@@ -11,7 +11,7 @@ class Creator(object):
 
   def __init__(self):
     self.config = json.load(open(CONFIG))
-    self.es = Elasticsearch([self.config["es"]])
+    self.es = Elasticsearch([self.config["es"]],verify_certs=False)
     self.butler_index = self.config["butler_index"]
 
   def delete(self):

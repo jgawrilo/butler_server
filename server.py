@@ -59,7 +59,7 @@ reload(sys)
 sys.setdefaultencoding('utf8')
 
 config = json.load(open("config.json"))
-nes = Elasticsearch([config["es"]])
+nes = Elasticsearch([config["es"]],verify_certs=False)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'kyc_butler'
