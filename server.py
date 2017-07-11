@@ -520,14 +520,10 @@ def build_profile(entries,likes,unlikes):
     for e in entries:
         for n in e["entities"]:
             if n["type"] == "PERSON":
-                app.logger.info(n)
                 all_names[n["value"]] = all_names.get(n["value"],[n["id"],0])
                 all_names[n["value"]][1] += n["count"]
 
     deduped_names = fuzzy_dedupe(all_names.keys())
-    
-
-    app.logger.info(json.dumps(all_names,indent=2))
 
     for e in entries:
         if e["type"] == "social":
