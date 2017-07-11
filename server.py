@@ -59,7 +59,7 @@ reload(sys)
 sys.setdefaultencoding('utf8')
 
 config = json.load(open("config.json"))
-nes = Elasticsearch([config["es"]])
+nes = Elasticsearch([config["es"]],verify_certs=False)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'kyc_butler'
@@ -516,14 +516,14 @@ def build_profile(entries,likes,unlikes):
     social_dict = {}
     other_dict = {}
 
-    all_names = {}
-    for e in entries:
-        for n in e["entities"]:
-            if n["type"] == "PERSON":
-                all_names[n["value"]] = all_names.get(n["value"],[n["id"],0])
-                all_names[n["value"]][1] += n["count"]
+    #all_names = {}
+    #for e in entries:
+    #    for n in e["entities"]:
+    #        if n["type"] == "PERSON":
+    #            all_names[n["value"]] = all_names.get(n["value"],[n["id"],0])
+    #            all_names[n["value"]][1] += n["count"]
 
-    deduped_names = fuzzy_dedupe(all_names.keys())
+    #deduped_names = fuzzy_dedupe(all_names.keys())
 
     for e in entries:
         if e["type"] == "social":
@@ -549,11 +549,14 @@ def build_profile(entries,likes,unlikes):
             address_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
         for n in e["entities"]:
             if n["type"] == "PERSON":
-                best_val = extractBests(n["value"],deduped_names)[0][0]
-                best_id = all_names[best_val][0]
-                names_dict[best_id] = names_dict.get(best_id,[best_val,0,set()])
-                names_dict[best_id][1] = all_names[best_val][1]
-                names_dict[best_id][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
+                names_dict[n["id"]] = names_dict.get(n["id"],[n["value"],0,set()])
+                names_dict[n["id"]][1] += 1 
+                names_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
+                #best_val = extractBests(n["value"],deduped_names)[0][0]
+                #best_id = all_names[best_val][0]
+                #names_dict[best_id] = names_dict.get(best_id,[best_val,0,set()])
+                #names_dict[best_id][1] = all_names[best_val][1]
+                #names_dict[best_id][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
 
     main_profile["other"] = sorted([{"id":x,"type":other_dict[x][3],"value":other_dict[x][0],"count":other_dict[x][1],"from":list(map(json.loads,other_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in other_dict],key=lambda x: len(x["from"]),reverse=True)
     main_profile["phone_numbers"] = sorted([{"id":x,"value":phone_dict[x][0],"count":phone_dict[x][1],"from":list(map(json.loads,phone_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in phone_dict],key=lambda x: len(x["from"]),reverse=True)
