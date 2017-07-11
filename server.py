@@ -22,7 +22,8 @@ import random
 from datetime import datetime
 from elasticsearch import Elasticsearch
 import hashlib
-from fuzzywuzzy import fuzz
+from fuzzywuzzy.process import extractBests
+from fuzzywuzzy.process import dedupe as fuzzy_dedupe
 from google import google
 import search2
 import os
@@ -367,22 +368,13 @@ def doNLP(text,likes,unlikes,the_url):
         best_return_rels = []
         for rel in return_rels:
             add = False
-            '''
-            for e in entity_set:
-                if e in rel["value"].upper():
-                    add = True
-                    break
-            '''
             if rel["subject"].upper() in entity_set and rel["object"].upper() in entity_set:
-                add = True
-
-            if add:
                 best_return_rels.append(rel)
 
-        return_ents = [{"value":x[0],"type":x[1],"count":ent_dict[x],"id":"entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest()} for x in ent_dict \
-        if "entity"+hashlib.md5(x[0] + "->" + x[1]).hexdigest() not in unlikes]
-        #except:
-        #    app.logger.error("Error duing NLP on -> " + the_url)
+        deduped = fuzzy_dedupe(map(lambda x: x[0],ent_dict))
+
+        return_ents = [{"value":extractBests(x[0],deduped)[0][0].upper(),"type":x[1],"count":ent_dict[x],"id":"entity"+hashlib.md5(extractBests(x[0],deduped)[0][0].upper() + "->" + x[1]).hexdigest()} for x in ent_dict \
+        if "entity"+hashlib.md5(extractBests(x[0],deduped)[0][0].upper() + "->" + x[1]).hexdigest() not in unlikes]
 
         return return_ents, best_return_rels, return_tokens
     except:
@@ -524,6 +516,19 @@ def build_profile(entries,likes,unlikes):
     social_dict = {}
     other_dict = {}
 
+    all_names = {}
+    for e in entries:
+        for n in e["entities"]:
+            if n["type"] == "PERSON":
+                app.logger.info(n)
+                all_names[n["value"]] = all_names.get(n["value"],[n["id"],0])
+                all_names[n["value"]][1] += n["count"]
+
+    deduped_names = fuzzy_dedupe(all_names.keys())
+    
+
+    app.logger.info(json.dumps(all_names,indent=2))
+
     for e in entries:
         if e["type"] == "social":
             social_dict[e["id"]] = social_dict.get(e["id"],[e["url"],0,None,None])
@@ -548,9 +553,11 @@ def build_profile(entries,likes,unlikes):
             address_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
         for n in e["entities"]:
             if n["type"] == "PERSON":
-                names_dict[n["id"]] = names_dict.get(n["id"],[n["value"],0,set()])
-                names_dict[n["id"]][1] += n["count"]
-                names_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
+                best_val = extractBests(n["value"],deduped_names)[0][0]
+                best_id = all_names[best_val][0]
+                names_dict[best_id] = names_dict.get(best_id,[best_val,0,set()])
+                names_dict[best_id][1] = all_names[best_val][1]
+                names_dict[best_id][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
 
     main_profile["other"] = sorted([{"id":x,"type":other_dict[x][3],"value":other_dict[x][0],"count":other_dict[x][1],"from":list(map(json.loads,other_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in other_dict],key=lambda x: len(x["from"]),reverse=True)
     main_profile["phone_numbers"] = sorted([{"id":x,"value":phone_dict[x][0],"count":phone_dict[x][1],"from":list(map(json.loads,phone_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in phone_dict],key=lambda x: len(x["from"]),reverse=True)
