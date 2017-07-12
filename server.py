@@ -34,6 +34,7 @@ import custom_extractors
 import langdetect
 import pandas as pd
 from sri_service import star_search
+from collections import Counter
 
 import subprocess, threading
 
@@ -548,18 +549,73 @@ def build_profile(entries,likes,unlikes):
 
     if config["star_search"]:
         pool = Pool(processes=config["page_threads"])
+        #### EMAILS ####
         ez = map(lambda x: x["profile"]["emails"], entries)
         ez = filter(lambda x: x, ez)
         ones_to_check = []
-        for ez in ez:
-            for one in ez:
+        for e1 in ez:
+            for one in e1:
                 ones_to_check.append(one)
         app.logger.info(ones_to_check)
         emails = map(lambda x: {"Email":x["value"],"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, ones_to_check)
         app.logger.info("STAR SEARCH: ")
         app.logger.info(emails)
         ds_results = pool.map(star_search,emails)
-        app.logger.info("STAR SEARCH:")
+        app.logger.info("STAR SEARCH RESULTS:")
+        app.logger.info(ds_results)
+        add_things(ds_results,phone_dict,address_dict,names_dict,email_dict,social_dict,other_dict)
+
+        ### PHONES ####
+        ez = map(lambda x: x["profile"]["phone_numbers"], entries)
+        ez = filter(lambda x: x, ez)
+        ones_to_check = []
+        for e1 in ez:
+            for one in e1:
+                ones_to_check.append(one)
+        app.logger.info(ones_to_check)
+        pgs = map(lambda x: {"Phone":x["value"],"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, ones_to_check)
+        app.logger.info("STAR SEARCH: ")
+        app.logger.info(pgs)
+        ds_results = pool.map(star_search,pgs)
+        app.logger.info("STAR SEARCH RESULTS:")
+        app.logger.info(ds_results)
+        add_things(ds_results,phone_dict,address_dict,names_dict,email_dict,social_dict,other_dict)
+
+        #### PGP_EMAIL ####
+        ez = map(lambda x: x["profile"]["emails"], entries)
+        ez = filter(lambda x: x, ez)
+        ones_to_check = []
+        for e1 in ez:
+            for one in e1:
+                ones_to_check.append(one)
+        app.logger.info(ones_to_check)
+        emails = map(lambda x: {"PGP_EMAIL":x["value"],"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, ones_to_check)
+        app.logger.info("STAR SEARCH: ")
+        app.logger.info(emails)
+        ds_results = pool.map(star_search,emails)
+        app.logger.info("STAR SEARCH RESULTS:")
+        app.logger.info(ds_results)
+        add_things(ds_results,phone_dict,address_dict,names_dict,email_dict,social_dict,other_dict)
+
+        #### PEOPLE ####
+        ez = map(lambda x: x["entities"], entries)
+        ez = filter(lambda x: x, ez)
+        ones_to_check = []
+        for e1 in ez:
+            for one in e1:
+                if one["type"] == "PERSON":
+                    ones_to_check.append(one["value"])
+
+        gos = []
+        for ez in Counter(ones_to_check).most_common()[:3]:
+            gos.append(ez[0])
+
+        app.logger.info(gos)
+        emails = map(lambda x: {"PersonName":x,"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, gos)
+        app.logger.info("STAR SEARCH: ")
+        app.logger.info(emails)
+        ds_results = pool.map(star_search,emails)
+        app.logger.info("STAR SEARCH RESULTS:")
         app.logger.info(ds_results)
         add_things(ds_results,phone_dict,address_dict,names_dict,email_dict,social_dict,other_dict)
 
@@ -839,7 +895,6 @@ def getScreenShot(url):
         return ss_return
 
 def process_dark_page(in_data):
-    app.logger.info(in_data)
     # Split tuple
     url_obj, page_and_text_and_token, name, likes, unlikes, bad_urls, language = in_data
     url = url_obj["url"]
@@ -910,16 +965,14 @@ def process_dark_page(in_data):
         nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
         return ()
 
-    app.logger.info({"name":name,"query":query,"time":datetime.now().isoformat(),
-        "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
     try:
         nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
         "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
     except:
-        app.logger.error("ES Indexig Issue!!" + url)
+        app.logger.error("ES Indexing Issue!! " + url)
         return ()
     #get_tables(url,i)
-    app.logger.warn("Returning back correctly!!" + url)
+    app.logger.info("Returning back correctly!! " + url)
     return (data, text, url, entities, tokens)
 
 def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,language,bad_urls):
@@ -936,7 +989,7 @@ def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,langua
         verify_certs=False
     )
     app.logger.info(QUERY)
-    res = dark_es.search(index="onions", q=QUERY,size=num_pages*10)
+    res = dark_es.search(index="onions", q=QUERY,size=10)
     size = res['hits']['total']
     app.logger.info(str(size) + " dark web search results found in index.")
     results = [{"url":x["_source"].get("url","http://" + x["_source"].get("domain")),"title":x["_source"]["title"],"text":x["_source"]["text"]} for x in res['hits']['hits'] if "url" in x["_source"] or "domain" in x["_source"]]
@@ -1393,7 +1446,7 @@ def new_process(q,name,num_pages=1,language="english"):
 
 @app.route('/ss/<path:path>')
 def send_js(path):
-    app.logger.info("PATH" + path)
+    app.logger.info("PATH: " + path)
     if os.path.isfile(os.path.join('ss',path)):
         return send_from_directory('ss', path)
     else:
