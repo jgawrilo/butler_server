@@ -8,4 +8,8 @@
     "page_threads":1,
     "silos":[],
     "chrome_loc":"/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome"
+    "star_search_url":"https://api",
+    "star_search":false,
+    "star_search_auth_u":"user",
+    "star_search_auth_p":"pass",
 }
