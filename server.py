@@ -547,10 +547,15 @@ def build_profile(entries,likes,unlikes):
     """
 
     if config["star_search"]:
-        pool = Pool(processes=10)
+        pool = Pool(processes=config["page_threads"])
         ez = map(lambda x: x["profile"]["emails"], entries)
-        app.logger.info(ez)
-        emails = map(lambda x: {"Email":"lukasz041105@o2.pl","RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, ez)
+        ez = filter(lambda x: x, ez)
+        ones_to_check = []
+        for ez in ez:
+            for one in ez:
+                ones_to_check.append(one)
+        app.logger.info(ones_to_check)
+        emails = map(lambda x: {"Email":x["value"],"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, ones_to_check)
         app.logger.info("STAR SEARCH: ")
         app.logger.info(emails)
         ds_results = pool.map(star_search,emails)
