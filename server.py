@@ -60,7 +60,7 @@ reload(sys)
 sys.setdefaultencoding('utf8')
 
 config = json.load(open("config.json"))
-nes = Elasticsearch([config["es"]],timeout=60)
+nes = Elasticsearch([config["es"]],verify_certs=False)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'kyc_butler'
@@ -536,14 +536,15 @@ def build_profile(entries,likes,unlikes):
     social_dict = {}
     other_dict = {}
 
+    """
     all_names = {}
     for e in entries:
         for n in e["entities"]:
             if n["type"] == "PERSON":
                 all_names[n["value"]] = all_names.get(n["value"],[n["id"],0])
                 all_names[n["value"]][1] += n["count"]
-
     deduped_names = fuzzy_dedupe(all_names.keys())
+    """
 
     if config["star_search"]:
         pool = Pool(processes=10)
@@ -581,11 +582,14 @@ def build_profile(entries,likes,unlikes):
             address_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
         for n in e["entities"]:
             if n["type"] == "PERSON":
-                best_val = extractBests(n["value"],deduped_names)[0][0]
-                best_id = all_names[best_val][0]
-                names_dict[best_id] = names_dict.get(best_id,[best_val,0,set()])
-                names_dict[best_id][1] = all_names[best_val][1]
-                names_dict[best_id][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
+                names_dict[n["id"]] = names_dict.get(n["id"],[n["value"],0,set()])
+                names_dict[n["id"]][1] += 1 
+                names_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
+                #best_val = extractBests(n["value"],deduped_names)[0][0]
+                #best_id = all_names[best_val][0]
+                #names_dict[best_id] = names_dict.get(best_id,[best_val,0,set()])
+                #names_dict[best_id][1] = all_names[best_val][1]
+                #names_dict[best_id][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
 
     main_profile["other"] = sorted([{"id":x,"type":other_dict[x][3],"value":other_dict[x][0],"count":other_dict[x][1],"from":list(map(json.loads,other_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in other_dict],key=lambda x: len(x["from"]),reverse=True)
     main_profile["phone_numbers"] = sorted([{"id":x,"value":phone_dict[x][0],"count":phone_dict[x][1],"from":list(map(json.loads,phone_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in phone_dict],key=lambda x: len(x["from"]),reverse=True)
@@ -903,9 +907,12 @@ def process_dark_page(in_data):
 
     app.logger.info({"name":name,"query":query,"time":datetime.now().isoformat(),
         "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
-    nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
+    try:
+        nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
         "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
-
+    except:
+        app.logger.error("ES Indexig Issue!!" + url)
+        return ()
     #get_tables(url,i)
     app.logger.warn("Returning back correctly!!" + url)
     return (data, text, url, entities, tokens)
@@ -933,7 +940,8 @@ def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,langua
         tokens = []
         if page:
             data = getByURL(url["url"],"texts",name)
-            tokens = data.get("tokens",[])
+            if data:
+                tokens = data.get("tokens",[])
         url["page"] = page
         url["tokens"] = tokens
     trans_results = map(lambda x:({"url":x["url"],"q":text,"title":x["title"],"text":x["text"]}, (x["page"],x["text"],x["tokens"]), name, likes, unlikes, bad_urls, language), results)
@@ -1192,7 +1200,7 @@ def process_single_page(in_data):
         nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
         "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
     except:
-        app.logger.error("Failed to index:" + url)
+        app.logger.info("ES Indexing Issue -> " + url)
         return ()
     app.logger.info("Indexed!" + url)
     #get_tables(url,i)
