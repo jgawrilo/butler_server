@@ -35,6 +35,7 @@ import langdetect
 import pandas as pd
 from sri_service import star_search
 from collections import Counter
+import cdr_search
 
 import subprocess, threading
 
@@ -560,12 +561,16 @@ def build_profile(entries,likes,unlikes):
         emails = map(lambda x: {"Email":x["value"],"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, ones_to_check)
         app.logger.info("STAR SEARCH: ")
         app.logger.info(emails)
-        ds_results = pool.map(star_search,emails)
+        ds_results = []
+        if emails:
+            ds_results = pool.map(star_search,emails)
+            pool.close()
         app.logger.info("STAR SEARCH RESULTS:")
         app.logger.info(ds_results)
         add_things(ds_results,phone_dict,address_dict,names_dict,email_dict,social_dict,other_dict)
 
         ### PHONES ####
+        pool = Pool(processes=config["page_threads"])
         ez = map(lambda x: x["profile"]["phone_numbers"], entries)
         ez = filter(lambda x: x, ez)
         ones_to_check = []
@@ -576,12 +581,16 @@ def build_profile(entries,likes,unlikes):
         pgs = map(lambda x: {"Phone":x["value"],"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, ones_to_check)
         app.logger.info("STAR SEARCH: ")
         app.logger.info(pgs)
-        ds_results = pool.map(star_search,pgs)
+        ds_results = []
+        if pgs:
+            ds_results = pool.map(star_search,pgs)
+            pool.close()
         app.logger.info("STAR SEARCH RESULTS:")
         app.logger.info(ds_results)
         add_things(ds_results,phone_dict,address_dict,names_dict,email_dict,social_dict,other_dict)
 
         #### PGP_EMAIL ####
+        pool = Pool(processes=config["page_threads"])
         ez = map(lambda x: x["profile"]["emails"], entries)
         ez = filter(lambda x: x, ez)
         ones_to_check = []
@@ -592,12 +601,16 @@ def build_profile(entries,likes,unlikes):
         emails = map(lambda x: {"PGP_EMAIL":x["value"],"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, ones_to_check)
         app.logger.info("STAR SEARCH: ")
         app.logger.info(emails)
-        ds_results = pool.map(star_search,emails)
+        ds_results = []
+        if emails:
+            ds_results = pool.map(star_search,emails)
+            pool.close()
         app.logger.info("STAR SEARCH RESULTS:")
         app.logger.info(ds_results)
         add_things(ds_results,phone_dict,address_dict,names_dict,email_dict,social_dict,other_dict)
 
         #### PEOPLE ####
+        pool = Pool(processes=config["page_threads"])
         ez = map(lambda x: x["entities"], entries)
         ez = filter(lambda x: x, ez)
         ones_to_check = []
@@ -614,7 +627,10 @@ def build_profile(entries,likes,unlikes):
         emails = map(lambda x: {"PersonName":x,"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, gos)
         app.logger.info("STAR SEARCH: ")
         app.logger.info(emails)
-        ds_results = pool.map(star_search,emails)
+        ds_results = []
+        if emails:
+            ds_results = pool.map(star_search,emails)
+            pool.close()
         app.logger.info("STAR SEARCH RESULTS:")
         app.logger.info(ds_results)
         add_things(ds_results,phone_dict,address_dict,names_dict,email_dict,social_dict,other_dict)
@@ -1188,7 +1204,10 @@ def process_single_page(in_data):
     elif any(map(url.startswith,map(lambda x: x["url_starts_with"],custom_extractors_list))):
         try:
             app.logger.info("Page is new. " + url)
-            html = get_html(url)
+            if page_and_text_and_token[3]:
+                html = page_and_text_and_token[4]
+            else:
+                html = get_html(url)
             all_text,title = get_text_title(html,url)
             readable_text = get_readability_text(html,url)
             summary, _ = get_text_title(readable_text,url)
@@ -1222,7 +1241,10 @@ def process_single_page(in_data):
     else:
         try:
             app.logger.info("Page is new. " + url)
-            html = get_html(url)
+            if page_and_text_and_token[3]:
+                html = page_and_text_and_token[4]
+            else:
+                html = get_html(url)
             all_text,title = get_text_title(html,url)
             readable_text = get_readability_text(html,url)
             summary, _ = get_text_title(readable_text,url)
@@ -1376,7 +1398,7 @@ def new_process(q,name,num_pages=1,language="english"):
                 tokens = data.get("tokens",[])
             else:
                 page = None
-        pages_and_texts_and_tokens.append((page,text,tokens))
+        pages_and_texts_and_tokens.append((page,text,tokens,False,""))
 
     dark_results = []
     for silo in config.get("silos",[]):
@@ -1385,7 +1407,15 @@ def new_process(q,name,num_pages=1,language="english"):
             dark_results = dr
     app.logger.info(str(len(dark_results)))
 
+    # CDR
+    if config["cdr_search"]:
+        for res in cdr_search.get_cdr_results(q[0], num_pages*10):
+            app.logger.info("CDR SEARCH!")
+            app.logger.info(res)
+            urls.append({"q":q[0],"url":res[0]})
+            pages_and_texts_and_tokens.append((None,"",[],True,res[1]))
 
+    app.logger.info("CDR SEARCH!")
     # How many threads to process with        
     pool = Pool(processes=config["page_threads"])
 
@@ -1394,16 +1424,13 @@ def new_process(q,name,num_pages=1,language="english"):
     results = []
 
     # Do the thing
-    try:
-        results = pool.map(process_single_page, map(lambda x:(x[0],x[1],name,likes,unlikes,bad_urls,language),zip(urls,pages_and_texts_and_tokens)))
-    except:
-        app.logger.error("Horrific is happening.")
+    results = pool.map(process_single_page, map(lambda x:(x[0],x[1],name,likes,unlikes,bad_urls,language),zip(urls,pages_and_texts_and_tokens)))
+    pool.close()
 
     results = results + dark_results
 
     app.logger.info("***** Finished %d urls" % len(results))
 
-    pool.close()
     
     # Filter out results from urls with errors
     results = filter(lambda x: len(x) > 0,results)
