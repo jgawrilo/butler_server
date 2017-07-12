@@ -33,6 +33,7 @@ import string
 import custom_extractors
 import langdetect
 import pandas as pd
+from sri_service import star_search
 
 import subprocess, threading
 
@@ -265,6 +266,8 @@ def get_table_rels(url,html):
         tables = pd.read_html(html)
         for table in tables:
             app.logger.info("{} tables found. ".format(len(table.columns)) + url)
+            if len(table) > 50:
+                continue
             if len(table.columns) == 2:
                 for i in range(len(table)):
                     rels.append({"subject":str(table.ix[i][0]), "object":str(table.ix[i][1]), "id":"other"+hashlib.md5(" ".join([str(table.ix[i][0]),":",str(table.ix[i][1])])).hexdigest(),"value":" ".join([str(table.ix[i][1])]),"type":str(table.ix[i][0])})
@@ -462,20 +465,6 @@ def build_json(name,url,title,entities,addresses,ptype,rels,emails,phones,images
     nes.index(index=config["butler_index"], doc_type="pages", body=data, id=pid)
     return data
 
-"""
-social_mappings = [
-        {"site":"Google","urls":["https://plus.google.com/"]},
-        {"site":"LinkedIn","urls":["https://www.linkedin.com/"]},
-        {"site":"Instagram","urls":["https://www.instagram.com/"],"left_split":"https://www.instagram.com/",
-        "profile_class":"_79dar","image_class":"_iv4d5"},
-        {"site":"Github","urls":["https://github.com/"],"left_split":"https://github.com/"},
-        {"site":"Pinterest","urls":["https://www.pinterest.com/"],"left_split":"https://www.pinterest.com/"},
-        {"site":"Facebook","urls":["https://www.facebook.com/"], "left_split":"https://www.facebook.com/"},
-        {"site":"Twitter","urls":["https://twitter.com/"],"left_split":"https://twitter.com/"},
-        {"site":"YouTube","urls":["https://www.youtube.com"],"left_split":"https://twitter.com/"}
-    ]
-"""
-
 def getUserName(url):
     try:
         if url.startswith("https://github.com/"):
@@ -496,6 +485,37 @@ def getUserName(url):
             return url.split("https://www.youtube.com/channel/")[1].split("/")[0].strip()
     except:
         return ""
+
+def add_things(data,phone_dict,address_dict,names_dict,email_dict,social_dict,other_dict):
+    philds = {
+        "email_addr":("emails",email_dict,False),
+        "phone_num":("phones",phone_dict,False),
+        "bitcoin_addr":("bitcoins",other_dict,True),
+        "pgp_key_ls":("pgps",other_dict,True),
+        "pgp_key_hash": ("pgp hashes",other_dict,True),
+        "org":("organizations",other_dict,True),
+        "person_name":("people",names_dict,False),
+        "gpe":("gpes",other_dict,True),
+        "pgp_email_addr":("pgp emails",email_dict,False),
+        "ssn_num":("ssns",other_dict,True),
+        "onion_appearance":("onions",other_dict,True)
+    }
+
+    for dd in data:
+        for field in philds.values():
+            data_name = field[0]
+            data_dict = field[1]
+            is_other = field[2]
+
+            for de in dd[data_name]:
+                if is_other:
+                    data_dict[de["id"]] = data_dict.get(de["id"],[de["value"],0,set(),data_name])
+                    data_dict[de["id"]][1] += 1
+                    data_dict[de["id"]][2].add(json.dumps({"id":"no_page","url":"Dark Web Persona Mapper"}))
+                else:
+                    data_dict[de["id"]] = data_dict.get(de["id"],[de["value"],0,set()])
+                    data_dict[de["id"]][1] += 1
+                    data_dict[de["id"]][2].add(json.dumps({"id":"no_page","url":"Dark Web Persona Mapper"}))
 
 def build_profile(entries,likes,unlikes):
     main_profile = {
@@ -520,14 +540,22 @@ def build_profile(entries,likes,unlikes):
     for e in entries:
         for n in e["entities"]:
             if n["type"] == "PERSON":
-                app.logger.info(n)
                 all_names[n["value"]] = all_names.get(n["value"],[n["id"],0])
                 all_names[n["value"]][1] += n["count"]
 
     deduped_names = fuzzy_dedupe(all_names.keys())
-    
 
-    app.logger.info(json.dumps(all_names,indent=2))
+    if config["star_search"]:
+        pool = Pool(processes=10)
+        ez = map(lambda x: x["profile"]["emails"], entries)
+        app.logger.info(ez)
+        emails = map(lambda x: {"Email":"lukasz041105@o2.pl","RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, ez)
+        app.logger.info("STAR SEARCH: ")
+        app.logger.info(emails)
+        ds_results = pool.map(star_search,emails)
+        app.logger.info("STAR SEARCH:")
+        app.logger.info(ds_results)
+        add_things(ds_results,phone_dict,address_dict,names_dict,email_dict,social_dict,other_dict)
 
     for e in entries:
         if e["type"] == "social":
@@ -546,7 +574,7 @@ def build_profile(entries,likes,unlikes):
         for n in e["profile"]["emails"]:
             email_dict[n["id"]] = email_dict.get(n["id"],[n["value"],0,set()])
             email_dict[n["id"]][1] += 1
-            email_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
+            email_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))                
         for n in e["profile"]["addresses"]:
             address_dict[n["id"]] = address_dict.get(n["id"],[n["value"],0,set()])
             address_dict[n["id"]][1] += 1
@@ -713,13 +741,15 @@ def handle_test_url():
             emails = get_emails(all_text,likes,unlikes,url)
             phones = getPhoneNumbers(all_text,likes,unlikes,url)
 
-            if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
-                return ()
+            addresses = addresses[:50]
+            emails = emails[:50]
+            phones = phones[:50]
 
             lang = ""
             data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path,summary,lang)
             return Response(json.dumps(data,indent=2))
-        except:
+        except Exception as e:
+            raise e
             return Response(json.dumps({}))
 
     else:
@@ -737,15 +767,17 @@ def handle_test_url():
             phones = getPhoneNumbers(all_text,likes,unlikes,url)
             lang = ""
             table_rels = get_table_rels(url,html)
-
             other.extend(table_rels)
 
-            if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
-                return Response(json.dumps({}))
+            addresses = addresses[:50]
+            emails = emails[:50]
+            phones = phones[:50]
 
             data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path,summary,lang)
+            data["text"] = all_text
             return Response(json.dumps(data,indent=2))
-        except:
+        except Exception as e:
+            raise e
             return Response(json.dumps({}))
 
     return Response(json.dumps({}))
@@ -857,10 +889,9 @@ def process_dark_page(in_data):
         table_rels = get_table_rels(url,html)
         other.extend(table_rels)
 
-        if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
-            app.logger.warn("Too many of something found.  Adding bad URL -> " + url)
-            nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
-            return ()
+        addresses = addresses[:50]
+        emails = emails[:50]
+        phones = phones[:50]
 
         lang = ""
         data = build_json(name,url,title,entities,addresses,"dark web",rels,emails,phones,images,other,screenshot_path,summary,lang)
@@ -1110,10 +1141,9 @@ def process_single_page(in_data):
             emails = get_emails(all_text,likes,unlikes,url)
             phones = getPhoneNumbers(all_text,likes,unlikes,url)
 
-            if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
-                app.logger.warn("Too many of something found.  Adding bad URL -> " + url)
-                nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
-                return ()
+            addresses = addresses[:50]
+            emails = emails[:50]
+            phones = phones[:50]
 
             lang = ""
             data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path,summary,lang)
@@ -1146,10 +1176,9 @@ def process_single_page(in_data):
                 #lang = langdetect.detect(text.strip())
                 app.logger.info("language is {}".format(lang))
 
-            if len(addresses) > 5 or len(emails) > 5 or len(phones) > 5:
-                app.logger.warn("Too many of something found.  Adding bad URL -> " + url)
-                nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
-                return ()
+            addresses = addresses[:50]
+            emails = emails[:50]
+            phones = phones[:50]
 
             data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path,summary,lang)
             data = mark_data(data,likes,unlikes)
@@ -1163,7 +1192,8 @@ def process_single_page(in_data):
         nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
         "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
     except:
-        raise Exception("".join(traceback.format_exception(*sys.exc_info())))
+        app.logger.error("Failed to index:" + url)
+        return ()
     app.logger.info("Indexed!" + url)
     #get_tables(url,i)
     app.logger.info("Returning back correctly!!" + url)
@@ -1295,11 +1325,14 @@ def new_process(q,name,num_pages=1,language="english"):
 
     app.logger.info("Processing %d urls" % len(urls))
 
+    results = []
+
     # Do the thing
     try:
         results = pool.map(process_single_page, map(lambda x:(x[0],x[1],name,likes,unlikes,bad_urls,language),zip(urls,pages_and_texts_and_tokens)))
     except:
-        raise Exception("".join(traceback.format_exception(*sys.exc_info())))
+        app.logger.error("Horrific is happening.")
+
     results = results + dark_results
 
     app.logger.info("***** Finished %d urls" % len(results))
