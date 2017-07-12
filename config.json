@@ -1,0 +1,24 @@
+{
+    "es":"http://localhost:9200/",
+    "nlp_service":"http://localhost:9000",
+    "port":5000,
+    "platform":"MAC",
+    "butler_index":"butler",
+    "start_num_pages":1,
+    "page_threads":3,
+    "silos":[
+    ],
+    "silos2":[
+        {
+            "name":"Dark Web",
+            "es_url":"https://memex1.csl.sri.com/elasticsearch/",
+            "auth_user":"memex",
+            "auth_pass":"MemexHS2014"
+        }
+    ],
+    "star_search_url":"https://memex1.csl.sri.com/lights_api",
+    "star_search":false,
+    "star_search_auth_u":"memex",
+    "star_search_auth_p":"MemexHS2014",
+    "chrome_loc":"/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome"
+}
