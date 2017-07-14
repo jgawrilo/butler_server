@@ -761,6 +761,7 @@ def handle_reload():
     resp = Response(json.dumps(return_data,indent=2))
     nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data})
     resp.headers['Access-Control-Allow-Origin'] = '*'
+    app.logger.info(json.dumps(return_data,indent=2))
     return resp
 
 # Called when save/export is clicked
