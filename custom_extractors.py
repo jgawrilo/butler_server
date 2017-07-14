@@ -10,6 +10,50 @@ config = json.load(open("config.json"))
 if config["platform"] != "MAC":
     from pyvirtualdisplay import Display
 
+
+def get_ok_caller(url):
+    if config["platform"] != "MAC":
+        display = Display(visible=0, size=(800, 600))
+        display.start()
+
+    options = webdriver.ChromeOptions()
+    options.add_argument('window-size=1200x600')
+    options.add_argument("--no-sandbox")
+
+    # initialize the driver
+    driver = webdriver.Chrome(chrome_options=options)
+    driver.get(url)
+    time.sleep(5)
+
+    # table table-stats table-condensed table-striped table-sortable
+    for i in driver.find_elements_by_css_selector('td'):
+        print i.text
+
+
+def get_family_tree(url):
+    try:
+        if config["platform"] != "MAC":
+            display = Display(visible=0, size=(800, 600))
+            display.start()
+
+        options = webdriver.ChromeOptions()
+        options.add_argument('window-size=1200x600')
+        options.add_argument("--no-sandbox")
+
+        # initialize the driver
+        driver = webdriver.Chrome(chrome_options=options)
+        driver.get(url)
+        time.sleep(10)
+        driver.find_elements_by_css_selector('.btn.btn-success.btn-sm.detail-link')[0].click()
+        time.sleep(5)
+        for i in driver.find_elements_by_css_selector('.panel.panel-default'):
+            print i.text
+        
+    except:
+        return []
+
+
+
 def get_intelius_data(url):
     try:
         if config["platform"] != "MAC":
@@ -41,7 +85,6 @@ def get_crunchbase_data(url):
             display.start()
 
         options = webdriver.ChromeOptions()
-        options.add_argument('headless')
         options.add_argument('window-size=1200x600')
         options.add_argument("--no-sandbox");
 
@@ -65,5 +108,7 @@ def get_crunchbase_data(url):
         return tups
 
 if __name__ == "__main__":
-    print get_crunchbase_data("https://www.crunchbase.com/organization/qadium-solutions")
+    #print get_crunchbase_data("https://www.crunchbase.com/organization/qadium-solutions")
     #print get_intelius_data("https://www.intelius.com/people/Justin-Gawrilow/Washington-DC/0ca4fh5qkz1")
+    #print get_family_tree("http://www.familytreenow.com/search/genealogy/results?first=Justin&last=gawrilow")
+    print get_ok_caller("http://www.okcaller.com/7037277445")
