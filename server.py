@@ -387,21 +387,25 @@ def doNLP(text,likes,unlikes,the_url):
         return [],[],[] 
 
 
-def get_urls(terms,num_pages=1):
+def get_urls(terms,name):
     """
         get results from google for search terms
     """
+    res_set = set()
     results = []
     # First try google search API
     for term in terms:
-        app.logger.info("Using API to search for -> " + term)
-        search_results = google.search(term, num_pages)
-        results.extend([{"q":term,"url":x.link} for x in search_results])
+        app.logger.info(name + " Using API to search for -> " + term["query"])
+        search_results = google.search(term["query"], term["num_pages"])
+        for x in search_results:
+            if x.link not in res_set:
+                results.append({"q":term["query"],"url":x.link,"language":term["language"]})
+                res_set.add(x.link)
 
     # If it's not working, we might be blocked. Get results through browser
     if not results:
-        app.logger.warn("Didn't get any results.  Trying browser to search ->" + term)
-        results = map(lambda x: {"q":terms[0],"url":x}, search2.do_search(terms[0],num_pages))
+        app.logger.warn(name + " Didn't get any results.  Trying browser to search")
+        results = search2.do_search(terms)
     return results
 
 def is_float(s):
@@ -745,18 +749,17 @@ def handle_reload():
     name = request.args.get("name")
     app.logger.info("GET: Reload " + name)
 
-    qs = getQueries(name)
+    qs = getQueries(name,0)
 
     if not qs:
         resp = Response(json.dumps({"success":True,"message":"Please start a search."}))
         resp.headers['Access-Control-Allow-Origin'] = '*'
         return resp
 
-    q, num_pages, language = qs[-1]
     likes,unlikes = getLikesUnlikes(name)
-    return_data = new_process([q],name,num_pages,language)
+    return_data = new_process(qs,name)
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data})
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -867,11 +870,10 @@ def handle_test_url():
 def handle_crunch():
     name = request.args.get("name")
     app.logger.info("GET: Crunch -> " + name)
-    qs = getQueries(name)
-    q, num_pages,language = qs[-1]
-    return_data = new_process([q],name,num_pages,language)
+    qs = getQueries(name,0)
+    return_data = new_process(qs,name)
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data})
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -973,8 +975,7 @@ def process_dark_page(in_data):
         emails = emails[:50]
         phones = phones[:50]
 
-        lang = ""
-        data = build_json(name,url,title,entities,addresses,"dark web",rels,emails,phones,images,other,screenshot_path,summary,lang)
+        data = build_json(name,url,title,entities,addresses,"dark web",rels,emails,phones,images,other,screenshot_path,summary,language)
         data = mark_data(data,likes,unlikes)
     except:
         app.logger.warn("Error occurred during processing.  Adding bad URL -> " + url)
@@ -995,7 +996,6 @@ def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,langua
     app.logger.info("Searching dark web for: " + text)
     text = text.strip()
     QUERY = 'text:"'+text+'"'
-    DOC_TYPE = ""
 
     dark_es = Elasticsearch(
         [url],
@@ -1004,8 +1004,8 @@ def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,langua
         use_ssl=True,
         verify_certs=False
     )
-    app.logger.info(QUERY)
-    res = dark_es.search(index="onions", q=QUERY,size=10)
+
+    res = dark_es.search(index="onions", q=QUERY,size=num_pages*10)
     size = res['hits']['total']
     app.logger.info(str(size) + " dark web search results found in index.")
     results = [{"url":x["_source"].get("url","http://" + x["_source"].get("domain")),"title":x["_source"]["title"],"text":x["_source"]["text"]} for x in res['hits']['hits'] if "url" in x["_source"] or "domain" in x["_source"]]
@@ -1019,20 +1019,14 @@ def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,langua
         url["page"] = page
         url["tokens"] = tokens
     trans_results = map(lambda x:({"url":x["url"],"q":text,"title":x["title"],"text":x["text"]}, (x["page"],x["text"],x["tokens"]), name, likes, unlikes, bad_urls, language), results)
-    # url_obj = {url, q}
-    # page_and_text_and_token = () page,text,tokens
-    # url_obj, page_and_text_and_token, name, likes, unlikes, bad_urls, language = in_data
+
     pool = Pool(processes=config["page_threads"])
-
-    # Do the thing
-    #results = map(process_dark_page,trans_results)
-
     results = pool.map(process_dark_page,trans_results)
     pool.close()
     app.logger.info(str(len(results)) + " dark web search results returned from processing.")
     return results
 
-def getQueries(name):
+def getQueries(name,add_sub):
     query = {
     "sort" : [
         { "time" : {"order" : "asc"}},
@@ -1048,7 +1042,7 @@ def getQueries(name):
     results = nes.search(index=config["butler_index"], doc_type="queries", body=query)
 
     if len(results["hits"]["hits"]) >= 1:
-        return map(lambda x:(x["_source"]["query"],x["_source"]["num_pages"],x["_source"]["language"]),results["hits"]["hits"])
+        return map(lambda x:{"new":False,"query":x["_source"]["query"],"num_pages":x["_source"]["num_pages"] + add_sub,"language":x["_source"]["language"]},results["hits"]["hits"])
     else:
         return []
 
@@ -1073,14 +1067,10 @@ def getLikesUnlikes(name):
 def handle_previous():
     name = request.args.get("name")
     app.logger.info("GET: Previous -> " + name)
-    qs = getQueries(name)
-    q, num_pages,language = qs[-1]
-    num_pages -= 1
-    if num_pages == 0:
-        num_pages = 1
-    return_data = new_process([q],name,num_pages,language)
+    qs = getQueries(name,-1)
+    return_data = new_process(qs,name)
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data})
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -1089,12 +1079,10 @@ def handle_previous():
 def handle_next():
     name = request.args.get("name")
     app.logger.info("GET: Next -> " + name)
-    qs = getQueries(name)
-    q, num_pages, language = qs[-1]
-    num_pages += 1
-    return_data = new_process([q],name,num_pages,language)
+    qs = getQueries(name,1)
+    return_data = new_process(qs,name)
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data})
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -1151,9 +1139,10 @@ def mark_data(page,likes,unlikes):
 
 def process_single_page(in_data):
     # Split tuple
-    url_obj, page_and_text_and_token, name, likes, unlikes, bad_urls, language = in_data
+    url_obj, page_and_text_and_token, name, likes, unlikes, bad_urls = in_data
     url = url_obj["url"]
     query = url_obj["q"]
+    lang = url_obj["language"]
 
     app.logger.info("** Processing -> " + url)
 
@@ -1230,7 +1219,6 @@ def process_single_page(in_data):
             emails = emails[:50]
             phones = phones[:50]
 
-            lang = ""
             data = build_json(name,url,title,entities,addresses,"page",rels,emails,phones,images,other,screenshot_path,summary,lang)
             data = mark_data(data,likes,unlikes)
         except:
@@ -1255,7 +1243,6 @@ def process_single_page(in_data):
             entities,other,tokens = doNLP(text,likes,unlikes,url)
             emails = get_emails(all_text,likes,unlikes,url)
             phones = getPhoneNumbers(all_text,likes,unlikes,url)
-            lang = ""
             table_rels = get_table_rels(url,html)
 
             other.extend(table_rels)
@@ -1276,14 +1263,9 @@ def process_single_page(in_data):
             return ()
 
     app.logger.info("Trying to index:" + url)
-    try:
-        nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
-        "language":language,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
-    except:
-        app.logger.info("ES Indexing Issue -> " + url)
-        return ()
+    nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
+    "language":lang,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
     app.logger.info("Indexed!" + url)
-    #get_tables(url,i)
     app.logger.info("Returning back correctly!!" + url)
     return (data, text, url, entities, tokens)
 
@@ -1331,16 +1313,16 @@ def getBadURLS(name):
     urls = nes.search(index=config["butler_index"], doc_type="bad_urls", body=query)
     return set(map(lambda x: x["_source"]["url"], urls["hits"]["hits"]))
 
-def new_process(q,name,num_pages=1,language="english"):
+def new_process(q,name):
     """
-        Start of search process
+        Start of main process
     """
 
-    app.logger.info("*** new_process -> " +  " ".join((map(str,[name, q, num_pages, language]))))
-
+    app.logger.info("*** new_process *** => " + name)
+    app.logger.info(json.dumps(q,indent=2))
     # Get likes and unlikes
     likes, unlikes = getLikesUnlikes(name)
-    app.logger.info("Found %d likes and %d unlikes." % (len(likes), len(unlikes)))
+    app.logger.info("Found %d likes and %d unlikes => " % (len(likes), len(unlikes))  + name)
 
     # Need to grab what the user was currently looking at
     last_results = do_reload(name)
@@ -1348,22 +1330,32 @@ def new_process(q,name,num_pages=1,language="english"):
     url_set = set()
 
     likes_to_search = get_likes_to_search(last_results,likes)
+    #TODO: Need to figure out how to store like value efficiently
 
+    urls = []
+
+    # KEEP liked pages
     if len(last_results["hits"]["hits"]) >= 1:
-        data = last_results["hits"]["hits"][-1]["_source"]["data"]
-        for p in data["pages"]:
-            if p["id"] in likes:
-                liked_urls.append({"url":p["url"],"q":data["meta"]["q"]})
-                url_set.add(p["url"])
+        data = last_results["hits"]["hits"]
+        for data_res in data:
+            one_res = data_res["_source"]["data"]
+            for p in one_res["pages"]:
+                if p["id"] in likes:
+                    urls.append({"url":p["url"],"q":data["meta"]["q"],"language":data["meta"]["language"]})
+                    url_set.add(p["url"])
 
     app.logger.info("%d liked urls we're going to keep" % (len(liked_urls)))
 
-    
-    app.logger.info("Getting %d google pages" % num_pages)
-
     # mine urls
-    urls = get_urls(q,num_pages)
+    new_urls = get_urls(q,name)
 
+    for url in new_urls:
+        if url["url"] not in url_set:
+           urls.append(url)
+           url_set.add(url["url"])
+
+    #TODO: Likes terms section - hold off for now
+    """
     if likes_to_search:
         results_per_q = max(1,int(float(num_pages*8) / len(likes_to_search)))
         app.logger.info("Querying for other things: " + str(results_per_q))
@@ -1375,18 +1367,7 @@ def new_process(q,name,num_pages=1,language="english"):
                 if url["url"] not in url_set:
                    urls.append(url)
                    url_set.add(url["url"])
-
-    #if likes_to_search:
-    #    app.logger.info("Also searching '%s' as a like." % " ".join(likes_to_search))
-    #    urls = urls + get_urls([" ".join(likes_to_search) + " " + q[0]],1)
-
-    app.logger.info(str(len(urls)) + " urls found.")
-
-    #urls = urls + liked_urls
-    for url in liked_urls:
-        if url["url"] not in url_set:
-           urls.append(url)
-           url_set.add(url["url"])
+    """
 
     app.logger.info(str(len(urls)) + " total urls found.")
     
@@ -1395,61 +1376,59 @@ def new_process(q,name,num_pages=1,language="english"):
     bad_urls = getBadURLS(name)
     app.logger.info("Found %d bad urls." % len(bad_urls))
 
-    # Index each query associated with the project (should be one for now)
+    # Index each NEW query associated with the project
     for query in q:
-        nes.index(index=config["butler_index"], doc_type="queries",body={"name":name,"query":query,"time":datetime.now().isoformat(), "num_pages":num_pages, "language":language})
+        if query["new"]:
+            nes.index(index=config["butler_index"], doc_type="queries",body={"name":name,"query":query["query"],"time":datetime.now().isoformat(), "num_pages":query["num_pages"], "language":query["language"]})
 
     # For the URLS we got back, check to see if we have them already and store info if we do
     pages_and_texts_and_tokens = []
     for url in urls:
         text = ""
         tokens = []
+        page = None
         page = getByURL(url["url"],"pages",name)
         if page:
             data = getByURL(url["url"],"texts",name)
             if data:
                 text = data.get("text","")
                 tokens = data.get("tokens",[])
-            else:
-                page = None
         pages_and_texts_and_tokens.append((page,text,tokens,False,""))
 
+    # Dark Web
     dark_results = []
     for silo in config.get("silos",[]):
         if silo["name"] == "Dark Web":
-            dr = dark_search(silo["es_url"],silo["auth_user"],silo["auth_pass"],q[0],likes, unlikes, name, num_pages, language, bad_urls)
-            dark_results = dr
+            for query in q:
+                app.logger.info("Doing dark web search => " + name + " " + query["query"])
+                dr = dark_search(silo["es_url"],silo["auth_user"],silo["auth_pass"],query["query"],likes, unlikes, name, query["num_pages"], query["language"], bad_urls)
+                dark_results.extend(dr)
     app.logger.info(str(len(dark_results)))
 
     # CDR
     if config["cdr_search"]:
-        for res in cdr_search.get_cdr_results(q[0], num_pages*10):
-            app.logger.info("CDR SEARCH!")
-            app.logger.info(res)
-            urls.append({"q":q[0],"url":res[0]})
-            pages_and_texts_and_tokens.append((None,"",[],True,res[1]))
+        app.logger.info("CDR SEARCH!")
+        for query in q:
+            for res in cdr_search.get_cdr_results(query["query"], query["num_pages"]*10):
+                if res[0] not in url_set:
+                    urls.append({"q":query["q"],"url":res[0],"language":query["language"]})
+                    pages_and_texts_and_tokens.append((None,"",[],True,res[1]))
 
-    app.logger.info("CDR SEARCH!")
     # How many threads to process with        
     pool = Pool(processes=config["page_threads"])
-
-    app.logger.info("Processing %d urls" % len(urls))
-
+    app.logger.info("Data Processing %d urls for %s" % (len(urls),name))
     results = []
-
-    # Do the thing
-    results = pool.map(process_single_page, map(lambda x:(x[0],x[1],name,likes,unlikes,bad_urls,language),zip(urls,pages_and_texts_and_tokens)))
+    results = pool.map(process_single_page, map(lambda x:(x[0],x[1],name,likes,unlikes,bad_urls),zip(urls,pages_and_texts_and_tokens)))
     pool.close()
 
     results = results + dark_results
 
-    app.logger.info("***** Finished %d urls" % len(results))
+    app.logger.info(name + " ***** Finished %d urls" % len(results))
 
-    
     # Filter out results from urls with errors
-    results = filter(lambda x: len(x) > 0,results)
+    results = filter(lambda x: x,results)
 
-    app.logger.info("%d urls after filtering" % len(results))
+    app.logger.info(name + " %d urls after filtering" % len(results))
 
     # Get texts, urls, and entry objects
     texts = map(lambda x: x[1],results)
@@ -1463,24 +1442,26 @@ def new_process(q,name,num_pages=1,language="english"):
     for i, token_guy in enumerate(tokens):
         doTexts.append((token_guy,i,good_urls[i],titles[i],summaries[i],results[i][0]))
 
-    app.logger.info("Running LDA with %d pages" % len(doTexts))
+    app.logger.info(name + " Running LDA with %d pages" % len(doTexts))
 
     tree_stuff = doLDA(doTexts,0,len(doTexts),None)
 
-    app.logger.info("Done running LDA")
+    app.logger.info(name + " Done running LDA")
 
     populateEntries(entries,tree_stuff)
-    app.logger.info("Building Profile")
+    app.logger.info(name + " Building Profile")
 
     profile = build_profile(entries,likes,unlikes)
 
-    app.logger.info("Profile Built")
+    app.logger.info(name + " Profile Built")
 
-    meta = {"name":name,"q":q,"num_pages":len(doTexts),"language":language}
+    meta = {"name":name,"q":q,"num_pages":len(doTexts),"language":q[0]["language"]}
 
     return_data = {"profile":profile,"pages":entries,"treemap":tree_stuff,"meta":meta}
 
     app.logger.info("Returning Results. %d pages." % len(entries))
+
+    app.logger.info(json.dumps(return_data,indent=2))
 
     return return_data
 
@@ -1504,11 +1485,13 @@ def handle_search():
     language = request.args.get("language")
     num_pages = int(request.args.get("n",config["start_num_pages"]))
 
-    app.logger.info("*** Search -> " +  " ".join((map(str,[name, q, num_pages, language]))))
+    qs = getQueries(name,0)
+    qs.append({"query":q,"num_pages":num_pages,"language":language, "new":True})
 
-    #return_data = process_search([q],name,num_pages,language)
-    return_data = new_process([q],name,num_pages,language)
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"query":q,"data":return_data,"language":language},id=name)
+    app.logger.info("*** New Search -> " +  " ".join((map(str,[name, q, num_pages, language]))))
+
+    return_data = new_process(qs,name)
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data})
 
     resp = Response(json.dumps(return_data,indent=2))
     resp.headers['Access-Control-Allow-Origin'] = '*'

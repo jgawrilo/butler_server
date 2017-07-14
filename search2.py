@@ -11,51 +11,62 @@ if config["platform"] != "MAC":
     from pyvirtualdisplay import Display
     
 
-def do_search(q,num_pages=1):
-    if config["platform"] != "MAC":
-        display = Display(visible=0, size=(800, 600))
-        display.start()
-
-    options = webdriver.ChromeOptions()
-    options.add_argument('headless')
-    options.add_argument('window-size=1200x600')
-    options.add_argument("--no-sandbox");
-
-    # initialize the driver
-    driver = webdriver.Chrome(chrome_options=options)
-    driver.get("http://www.google.com")
-    input_element = driver.find_element_by_name("q")
-    input_element.send_keys(q)
-    input_element.submit()
-
+def do_search(q):
     urls = []
+    res_set = set()
+    try:
+        if config["platform"] != "MAC":
+            display = Display(visible=0, size=(800, 600))
+            display.start()
 
-    RESULTS_LOCATOR = "//div/h3/a"
+        options = webdriver.ChromeOptions()
+        options.add_argument('headless')
+        options.add_argument('window-size=1200x600')
+        options.add_argument("--no-sandbox");
 
-    WebDriverWait(driver, 10).until(
-        EC.visibility_of_element_located((By.XPATH, RESULTS_LOCATOR)))
+        # initialize the driver
+        driver = webdriver.Chrome(chrome_options=options)
+        driver.get("http://www.google.com")
 
-    page1_results = driver.find_elements(By.XPATH, RESULTS_LOCATOR)
+        for search_term in q:
+            input_element = driver.find_element_by_name("q")
+            input_element.send_keys(search_term["query"])
+            input_element.submit()
 
-    for item in page1_results:
-        #print(item.text, item.get_attribute("href"))
-        urls.append(item.get_attribute("href"))
+            RESULTS_LOCATOR = "//div/h3/a"
 
-    done_num = 1
+            WebDriverWait(driver, 10).until(
+                EC.visibility_of_element_located((By.XPATH, RESULTS_LOCATOR)))
 
-    for i in range(done_num,num_pages):
-        clicker = driver.find_element_by_class_name("pn")
-        clicker.click()
+            page1_results = driver.find_elements(By.XPATH, RESULTS_LOCATOR)
 
-        time.sleep(5)
+            for item in page1_results:
+                url = item.get_attribute("href")
+                if url not in res_set:
+                    urls.append({"q":search_term["query"], "url":url,"language":search_term["language"]})
+                    res_set.add(url)
 
-        page1_results = driver.find_elements(By.XPATH, RESULTS_LOCATOR)
+            done_num = 1
 
-        for item in page1_results:
-            #print(item.text, item.get_attribute("href"))
-            urls.append(item.get_attribute("href"))
+            for i in range(done_num,search_term["num_pages"]):
+                clicker = driver.find_element_by_class_name("pn")
+                clicker.click()
 
-    if config["platform"] != "MAC":
-        display.stop()
+                time.sleep(5)
+
+                page1_results = driver.find_elements(By.XPATH, RESULTS_LOCATOR)
+
+                for item in page1_results:
+                    url = item.get_attribute("href")
+                    if url not in res_set:
+                        urls.append({"q":search_term["query"], "url":url,"language":search_term["language"]})
+                        res_set.add(url)
+            time.sleep(5)
+
+        if config["platform"] != "MAC":
+            display.stop()
         
-    return urls
+        return urls
+
+    except:
+        return urls
