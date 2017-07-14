@@ -1345,6 +1345,7 @@ def new_process(q,name,num_pages=1,language="english"):
     # Need to grab what the user was currently looking at
     last_results = do_reload(name)
     liked_urls = []
+    url_set = set()
 
     likes_to_search = get_likes_to_search(last_results,likes)
 
@@ -1353,6 +1354,7 @@ def new_process(q,name,num_pages=1,language="english"):
         for p in data["pages"]:
             if p["id"] in likes:
                 liked_urls.append({"url":p["url"],"q":data["meta"]["q"]})
+                url_set.add(p["url"])
 
     app.logger.info("%d liked urls we're going to keep" % (len(liked_urls)))
 
@@ -1362,17 +1364,29 @@ def new_process(q,name,num_pages=1,language="english"):
     # mine urls
     urls = get_urls(q,num_pages)
 
-    #for like in likes_to_search:
-    #    app.logger.info("Also searching '%s' as a like." % like)
-    #    urls = urls + get_urls([like + q[0]],1)
-
     if likes_to_search:
-        app.logger.info("Also searching '%s' as a like." % " ".join(likes_to_search))
-        urls = urls + get_urls([" ".join(likes_to_search) + " " + q[0]],1)
+        results_per_q = max(1,int(float(num_pages*8) / len(likes_to_search)))
+        app.logger.info("Querying for other things: " + str(results_per_q))
+
+        for like in likes_to_search:
+            app.logger.info("Also searching '%s' as a like." % like)
+            new_urls = get_urls([like],1)[:results_per_q]
+            for url in new_urls:
+                if url["url"] not in url_set:
+                   urls.append(url)
+                   url_set.add(url["url"])
+
+    #if likes_to_search:
+    #    app.logger.info("Also searching '%s' as a like." % " ".join(likes_to_search))
+    #    urls = urls + get_urls([" ".join(likes_to_search) + " " + q[0]],1)
 
     app.logger.info(str(len(urls)) + " urls found.")
 
-    urls = urls + liked_urls
+    #urls = urls + liked_urls
+    for url in liked_urls:
+        if url["url"] not in url_set:
+           urls.append(url)
+           url_set.add(url["url"])
 
     app.logger.info(str(len(urls)) + " total urls found.")
     
