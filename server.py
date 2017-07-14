@@ -1455,7 +1455,7 @@ def new_process(q,name):
 
     app.logger.info(name + " Profile Built")
 
-    meta = {"name":name,"q":q,"num_pages":len(doTexts),"language":q[0]["language"]}
+    meta = {"name":name,"q":q[-1]["query"],"num_pages":len(doTexts),"language":q[-1]["language"]}
 
     return_data = {"profile":profile,"pages":entries,"treemap":tree_stuff,"meta":meta}
 
