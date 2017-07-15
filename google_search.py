@@ -23,7 +23,7 @@ def get_urls(terms,num_pages=1):
     print json.dumps(results)
 
     # If it's not working, we might be blocked. Get results through browser
-    if results:
+    if not results:
         print "Browser"
         results = map(lambda x: {"q":terms[0],"url":x}, search2.do_search(terms[0],num_pages))
     return results

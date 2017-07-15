@@ -20,7 +20,7 @@ from gensim.summarization import summarize
 import haul
 import random
 from datetime import datetime
-from elasticsearch import Elasticsearch
+from elasticsearch import Elasticsearch, NotFoundError
 import hashlib
 from fuzzywuzzy.process import extractBests
 from fuzzywuzzy.process import dedupe as fuzzy_dedupe
@@ -330,9 +330,9 @@ def doNLP(text,likes,unlikes,the_url):
         app.logger.info("Starting NLP on -> " + the_url)
         url = config["nlp_service"] + '/?properties={"annotators": "tokenize,ssplit,pos,ner,depparse,openie"}'
         return_ents, best_return_rels, return_tokens, return_rels = [],[],[],[]
-        resp = requests.post(url,data=text,timeout=60)
+        resp = requests.post(url,data=text,timeout=15)
         data = json.loads(resp.text)
-        app.logger.info("Finished NLP on -> " + the_url)
+        app.logger.info("Finished NLP Call on -> " + the_url)
 
         entities = []
         return_tokens = []
@@ -381,6 +381,7 @@ def doNLP(text,likes,unlikes,the_url):
         return_ents = [{"value":extractBests(x[0],deduped)[0][0].upper(),"type":x[1],"count":ent_dict[x],"id":"entity"+hashlib.md5(extractBests(x[0],deduped)[0][0].upper() + "->" + x[1]).hexdigest()} for x in ent_dict \
         if "entity"+hashlib.md5(extractBests(x[0],deduped)[0][0].upper() + "->" + x[1]).hexdigest() not in unlikes]
 
+        app.logger.info("Finished NLP Return on -> " + the_url)
         return return_ents, best_return_rels, return_tokens
     except:
         app.logger.error("NLP not working -> " + the_url)
@@ -698,6 +699,10 @@ def handle_unlike():
     uid = request.args.get("id")
     app.logger.info("GET: Unlike " + str(name) + " " + str(uid))
     nes.index(index=config["butler_index"], doc_type="unlikes",body={"name":name,"time":datetime.now().isoformat(),"id":uid})
+    try:
+        nes.delete(index=config["butler_index"], doc_type="likes",id=uid)
+    except NotFoundError:
+        pass
     return resp
 
 # Called when something is liked
@@ -707,6 +712,10 @@ def handle_like():
     lid = request.args.get("id")
     app.logger.info("GET: Like " + str(name) + " " + str(lid))
     nes.index(index=config["butler_index"], doc_type="likes",body={"name":name,"time":datetime.now().isoformat(),"id":lid})
+    try:
+        nes.delete(index=config["butler_index"], doc_type="unlikes",id=lid)
+    except NotFoundError:
+        pass
     return resp
 
 # Called when clear is clicked
@@ -731,6 +740,9 @@ def handle_get_searches():
 
 def do_reload(name):
     query = {
+    "sort" : [
+        { "time" : {"order" : "desc"}},
+    ],
     "query": {
         "term": {
            "name": {
@@ -758,10 +770,14 @@ def handle_reload():
 
     likes,unlikes = getLikesUnlikes(name)
     return_data = new_process(qs,name)
+    if not return_data:
+        resp = Response(json.dumps({"success":False,"message":"No Results.  Please start a new search"}))
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        return resp
+
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data})
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data,"time":datetime.now().isoformat()})
     resp.headers['Access-Control-Allow-Origin'] = '*'
-    app.logger.info(json.dumps(return_data,indent=2))
     return resp
 
 # Called when save/export is clicked
@@ -873,8 +889,13 @@ def handle_crunch():
     app.logger.info("GET: Crunch -> " + name)
     qs = getQueries(name,0)
     return_data = new_process(qs,name)
+    if not return_data:
+        resp = Response(json.dumps({"success":False,"message":"No Results.  Please start a new search"}))
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        return resp
+
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data})
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data,"time":datetime.now().isoformat()})
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -1043,7 +1064,7 @@ def getQueries(name,add_sub):
     results = nes.search(index=config["butler_index"], doc_type="queries", body=query)
 
     if len(results["hits"]["hits"]) >= 1:
-        return map(lambda x:{"new":False,"query":x["_source"]["query"],"num_pages":x["_source"]["num_pages"] + add_sub,"language":x["_source"]["language"]},results["hits"]["hits"])
+        return map(lambda x:{"new":False,"query":x["_source"]["query"],"num_pages":max(x["_source"]["num_pages"] + add_sub,1),"language":x["_source"]["language"]},results["hits"]["hits"])
     else:
         return []
 
@@ -1070,8 +1091,18 @@ def handle_previous():
     app.logger.info("GET: Previous -> " + name)
     qs = getQueries(name,-1)
     return_data = new_process(qs,name)
+    if not return_data:
+        resp = Response(json.dumps({"success":False,"message":"No Results.  Please start a new search"}))
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        return resp
+
+    if not return_data:
+        resp = Response(json.dumps({"success":False,"message":"No Results.  Please start a new search"}))
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        return resp
+
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data})
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data,"time":datetime.now().isoformat()})
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -1082,8 +1113,13 @@ def handle_next():
     app.logger.info("GET: Next -> " + name)
     qs = getQueries(name,1)
     return_data = new_process(qs,name)
+    if not return_data:
+        resp = Response(json.dumps({"success":False,"message":"No Results.  Please start a new search"}))
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        return resp
+
     resp = Response(json.dumps(return_data,indent=2))
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data})
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data,"time":datetime.now().isoformat()})
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
@@ -1266,7 +1302,7 @@ def process_single_page(in_data):
     app.logger.info("Trying to index:" + url)
     nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
     "language":lang,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
-    app.logger.info("Indexed!" + url)
+    app.logger.info("Indexed! " + url)
     app.logger.info("Returning back correctly!!" + url)
     return (data, text, url, entities, tokens)
 
@@ -1339,10 +1375,10 @@ def new_process(q,name):
     if len(last_results["hits"]["hits"]) >= 1:
         data = last_results["hits"]["hits"]
         for data_res in data:
-            one_res = data_res["_source"]["data"]
-            for p in one_res["pages"]:
-                if p["id"] in likes:
-                    urls.append({"url":p["url"],"q":data["meta"]["q"],"language":data["meta"]["language"]})
+            one_res = data_res["_source"].get("data",{})
+            for p in one_res.get("pages",[]):
+                if p["id"] in likes and p["url"] not in url_set:
+                    urls.append({"url":p["url"],"q":one_res["meta"]["q"],"language":one_res["meta"]["language"]})
                     url_set.add(p["url"])
 
     app.logger.info("%d liked urls we're going to keep" % (len(liked_urls)))
@@ -1379,8 +1415,7 @@ def new_process(q,name):
 
     # Index each NEW query associated with the project
     for query in q:
-        if query["new"]:
-            nes.index(index=config["butler_index"], doc_type="queries",body={"name":name,"query":query["query"],"time":datetime.now().isoformat(), "num_pages":query["num_pages"], "language":query["language"]})
+        nes.index(index=config["butler_index"], doc_type="queries",body={"name":name,"query":query["query"],"time":datetime.now().isoformat(), "num_pages":query["num_pages"], "language":query["language"]},id=hashlib.md5(query["query"]).hexdigest())
 
     # For the URLS we got back, check to see if we have them already and store info if we do
     pages_and_texts_and_tokens = []
@@ -1431,6 +1466,9 @@ def new_process(q,name):
 
     app.logger.info(name + " %d urls after filtering" % len(results))
 
+    if not results:
+        return None
+
     # Get texts, urls, and entry objects
     texts = map(lambda x: x[1],results)
     good_urls = map(lambda x: x[2],results)
@@ -1456,13 +1494,11 @@ def new_process(q,name):
 
     app.logger.info(name + " Profile Built")
 
-    meta = {"name":name,"q":q[-1]["query"],"num_pages":len(doTexts),"language":q[-1]["language"]}
+    meta = {"name":name,"q":[q[-1]["query"]],"num_pages":len(doTexts),"language":q[-1]["language"]}
 
     return_data = {"profile":profile,"pages":entries,"treemap":tree_stuff,"meta":meta}
 
     app.logger.info("Returning Results. %d pages." % len(entries))
-
-    app.logger.info(json.dumps(return_data,indent=2))
 
     return return_data
 
@@ -1492,7 +1528,12 @@ def handle_search():
     app.logger.info("*** New Search -> " +  " ".join((map(str,[name, q, num_pages, language]))))
 
     return_data = new_process(qs,name)
-    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data})
+    if not return_data:
+        resp = Response(json.dumps({"success":False,"message":"No Results.  Please start a new search"}))
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        return resp
+
+    nes.index(index=config["butler_index"], doc_type="results",body={"name":name,"queries":qs,"data":return_data,"time":datetime.now().isoformat()})
 
     resp = Response(json.dumps(return_data,indent=2))
     resp.headers['Access-Control-Allow-Origin'] = '*'
