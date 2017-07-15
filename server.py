@@ -407,6 +407,14 @@ def get_urls(terms,name):
     if not results:
         app.logger.warn(name + " Didn't get any results.  Trying browser to search")
         results = search2.do_search(terms)
+
+    if not results:
+        app.logger.warn(name + " Didn't get any results.  Trying servers")
+        for box in config["search_boxes"]:
+            results = json.loads(requests.post(box,json=terms).text)
+            if results:
+                return results
+
     return results
 
 def is_float(s):
