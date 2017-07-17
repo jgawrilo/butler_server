@@ -326,66 +326,73 @@ def get_readability_text(html,url):
 
 
 def doNLP(text,likes,unlikes,the_url):
-    try:
-        app.logger.info("Starting NLP on -> " + the_url)
-        url = config["nlp_service"] + '/?properties={"annotators": "tokenize,ssplit,pos,ner,depparse,openie"}'
-        return_ents, best_return_rels, return_tokens, return_rels = [],[],[],[]
-        resp = requests.post(url,data=text,timeout=15)
-        data = json.loads(resp.text)
-        app.logger.info("Finished NLP Call on -> " + the_url)
+    print "Starting NLP on -> " + the_url
+    url = config["nlp_service"] + '/?properties={"annotators": "tokenize,ssplit,pos,ner,depparse,openie"}'
+    return_ents, best_return_rels, return_rels = [],[],[]
+    return_tokens = []
+    resp = requests.post(url,data=text,timeout=15)
+    data = json.loads(resp.text)
+    with open("out.txt","w") as out:
+        out.write(json.dumps(data,indent=2))
+    print "Finished NLP Call on -> " + the_url
 
-        entities = []
-        return_tokens = []
+    ent_dict = {}
+    ent_set = set()
 
-        for sentence in data["sentences"]:
-            for token in sentence["tokens"]:
-                return_tokens.append(token["lemma"])
-                if token["ner"] not in  ["O","NUMBER","DURATION","DATE","MONEY","ORDINAL","PERCENT","TIME"]:
-                    entities.append((token["ner"],token["word"],token["index"]))
-
-            for rel in sentence["openie"]:
-                return_rels.append({"subject":rel["subject"], "object":rel["object"], "id":"other"+hashlib.md5(" ".join([rel["subject"],rel["relation"],rel["object"]])).hexdigest(),"value":" ".join([rel["subject"],rel["relation"],rel["object"]]),"type":""})
-        
-        ent_list = []
+    for sentence in data["sentences"]:
         last_type = None
-        last_index = 1
-        for ent in entities:
-            if last_type == ent[0] and last_index == ent[2]-1:
-                ent_list[-1] = (" ".join([ent_list[-1][0],ent[1]]),ent[0])
+        ent_chain = []
+        for token in sentence["tokens"]:
+            return_tokens.append(token["lemma"])
+            if token["ner"] not in ["O","NUMBER","DURATION","DATE","MONEY","ORDINAL","PERCENT","TIME"]:
+                if last_type == None:
+                    last_type = token["ner"]
+                    ent_chain.append(token["word"])
+                else:
+                    if token["ner"] == last_type:
+                        ent_chain.append(token["word"])
+                    else:
+                        to_add = ' '.join(" ".join(ent_chain).split()).upper().replace("\\n","").strip().split("'S")[0]
+                        if len(to_add) < 100:
+                            ent_dict["->".join((last_type,to_add))] = ent_dict.get("->".join((last_type,to_add)),0)
+                            ent_dict["->".join((last_type,to_add))] += 1
+                            ent_set.add(to_add)
+                        last_type = token["ner"]
+                        ent_chain = [token["word"]]
             else:
-                ent_list.append((ent[1],ent[0]))
-            last_type = ent[0]
-            last_index = ent[2]
-        ent_dict = {}
-        entity_set = set()
-        for ent in ent_list:
-            # normaalizing text
-            ent_txt = ent[0]
-            label = ent[1]
-            ent_txt = ' '.join(ent_txt.split()).upper().replace("\\n","").strip()
-            ent_txt = ent_txt.split("'S")[0]
-            ent_txt = ''.join([i for i in ent_txt if not i.isdigit()])
+                if last_type and ent_chain:
+                    to_add = ' '.join(" ".join(ent_chain).split()).upper().replace("\\n","").strip().split("'S")[0]
+                    if len(to_add) < 100:
+                        ent_dict["->".join((last_type,to_add))] = ent_dict.get("->".join((last_type,to_add)),0)
+                        ent_dict["->".join((last_type,to_add))] += 1
+                        ent_set.add(to_add)
+                    last_type = None
+                    ent_chain = [] 
 
-            ent_dict[(ent_txt,label)] = ent_dict.get((ent_txt,label),0)
-            ent_dict[(ent_txt,label)] += 1
-            entity_set.add(ent_txt)
+        for rel in sentence["openie"]:
+            if len(rel["subject"]) < 100 and len(rel["object"]) < 100:
+                return_rels.append({"subject":rel["subject"], "object":rel["object"], "id":"other"+hashlib.md5(" ".join([rel["subject"],rel["relation"],rel["object"]])).hexdigest(),"value":" ".join([rel["subject"],rel["relation"],rel["object"]]),"type":""})
 
-        best_return_rels = []
-        for rel in return_rels:
-            add = False
-            if rel["subject"].upper() in entity_set and rel["object"].upper() in entity_set:
-                best_return_rels.append(rel)
+    print "Finished sentences"
+    #print json.dumps(ent_dict,indent=2)
+    #print json.dumps(return_rels,indent=2)
 
-        deduped = fuzzy_dedupe(map(lambda x: x[0],ent_dict))
+    best_return_rels = []
+    for rel in return_rels:
+        sub = ' '.join(rel["subject"].split()).upper().replace("\\n","").strip().split("'S")[0]
+        obj = ' '.join(rel["object"].split()).upper().replace("\\n","").strip().split("'S")[0]
+        if sub in ent_set or obj in ent_set:
+            best_return_rels.append(rel)
 
-        return_ents = [{"value":extractBests(x[0],deduped)[0][0].upper(),"type":x[1],"count":ent_dict[x],"id":"entity"+hashlib.md5(extractBests(x[0],deduped)[0][0].upper() + "->" + x[1]).hexdigest()} for x in ent_dict \
-        if "entity"+hashlib.md5(extractBests(x[0],deduped)[0][0].upper() + "->" + x[1]).hexdigest() not in unlikes]
+    print "Rels"
+    deduped = fuzzy_dedupe(map(lambda x: x.split("->")[1],ent_dict))
+    print "Finished dedupe"
 
-        app.logger.info("Finished NLP Return on -> " + the_url)
-        return return_ents, best_return_rels, return_tokens
-    except:
-        app.logger.error("NLP not working -> " + the_url)
-        return [],[],[] 
+    return_ents = [{"value":extractBests(x.split("->")[1],deduped)[0][0],"type":x.split("->")[0],"count":ent_dict[x],"id":"entity"+hashlib.md5(extractBests(x.split("->")[1],deduped)[0][0] + "->" + x.split("->")[0]).hexdigest()} for x in ent_dict \
+    if "entity"+hashlib.md5(extractBests(x.split("->")[1],deduped)[0][0] + "->" + x.split("->")[0]).hexdigest() not in unlikes]
+
+    print "Finished NLP Return on -> " + the_url
+    return return_ents, best_return_rels, return_tokens
 
 
 def get_urls(terms,name):
@@ -532,7 +539,7 @@ def add_things(data,phone_dict,address_dict,names_dict,email_dict,social_dict,ot
                     data_dict[de["id"]][1] += 1
                     data_dict[de["id"]][2].add(json.dumps({"id":"no_page","url":"Dark Web Persona Mapper"}))
 
-def build_profile(entries,likes,unlikes):
+def build_profile(entries,likes,unlikes,likes_to_search):
     main_profile = {
             "names":[],
             "emails":[],
@@ -648,6 +655,7 @@ def build_profile(entries,likes,unlikes):
         app.logger.info(ds_results)
         add_things(ds_results,phone_dict,address_dict,names_dict,email_dict,social_dict,other_dict)
 
+
     for e in entries:
         if e["type"] == "social":
             social_dict[e["id"]] = social_dict.get(e["id"],[e["url"],0,None,None])
@@ -675,11 +683,46 @@ def build_profile(entries,likes,unlikes):
                 names_dict[n["id"]] = names_dict.get(n["id"],[n["value"],0,set()])
                 names_dict[n["id"]][1] += 1 
                 names_dict[n["id"]][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
-                #best_val = extractBests(n["value"],deduped_names)[0][0]
-                #best_id = all_names[best_val][0]
-                #names_dict[best_id] = names_dict.get(best_id,[best_val,0,set()])
-                #names_dict[best_id][1] = all_names[best_val][1]
-                #names_dict[best_id][2].add(json.dumps({"id":e["id"],"url":e["url"]}))
+
+        for liked_thing in likes_to_search:
+            l_type,js = liked_thing
+            js = json.loads(js)
+            if l_type == "emails":
+                if js["id"] not in email_dict:
+                    email_dict[js["id"]] = email_dict.get(js["id"],[js["value"],0,set()])
+                    email_dict[js["id"]][1] = js["count"]
+                    for fr in js["from"]:
+                        email_dict[js["id"]][2].add(json.dumps(fr))
+            if l_type == "addresses":
+                if js["id"] not in address_dict:
+                    address_dict[js["id"]] = address_dict.get(js["id"],[js["value"],0,set()])
+                    address_dict[js["id"]][1] = js["count"]
+                    for fr in js["from"]:
+                        address_dict[js["id"]][2].add(json.dumps(fr))
+            if l_type == "phone_numbers":
+                if js["id"] not in phone_dict:
+                    phone_dict[js["id"]] = phone_dict.get(js["id"],[js["value"],0,set()])
+                    phone_dict[js["id"]][1] = js["count"]
+                    for fr in js["from"]:
+                        phone_dict[js["id"]][2].add(json.dumps(fr))
+            if l_type == "other":
+                if js["id"] not in other_dict:
+                    other_dict[js["id"]] = other_dict.get(js["id"],[js["value"],0,set(),js["type"]])
+                    other_dict[js["id"]][1] = js["count"]
+                    for fr in js["from"]:
+                        other_dict[js["id"]][2].add(json.dumps(fr))
+            if l_type == "social_media":
+                if js["id"] not in social_dict:
+                    social_dict[js["id"]] = social_dict.get(js["id"],[js["url"],0,None,None])
+                    social_dict[js["id"]][1] = js["count"]
+                    social_dict[e["id"]][3] = js["username"]
+            if l_type == "relationships":
+                if js["id"] not in names_dict:
+                    names_dict[js["id"]] = names_dict.get(js["id"],[js["value"],0,set()])
+                    names_dict[js["id"]][1] = js["count"]
+                    for fr in js["from"]:
+                        names_dict[js["id"]][2].add(json.dumps(fr))
+
 
     main_profile["other"] = sorted([{"id":x,"type":other_dict[x][3],"value":other_dict[x][0],"count":other_dict[x][1],"from":list(map(json.loads,other_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in other_dict],key=lambda x: len(x["from"]),reverse=True)
     main_profile["phone_numbers"] = sorted([{"id":x,"value":phone_dict[x][0],"count":phone_dict[x][1],"from":list(map(json.loads,phone_dict[x][2])), "metadata":{"liked":x in likes, "unliked":x in unlikes}} for x in phone_dict],key=lambda x: len(x["from"]),reverse=True)
@@ -708,7 +751,7 @@ def handle_unlike():
     app.logger.info("GET: Unlike " + str(name) + " " + str(uid))
     nes.index(index=config["butler_index"], doc_type="unlikes",body={"name":name,"time":datetime.now().isoformat(),"id":uid})
     try:
-        nes.delete(index=config["butler_index"], doc_type="likes",id=uid)
+        nes.delete_by_query(index=config["butler_index"], doc_type="likes",body={"query":{"bool":{"must":[{"term":{"name":name}},{"term":{"id":uid}}]}}})
     except NotFoundError:
         pass
     return resp
@@ -721,7 +764,7 @@ def handle_like():
     app.logger.info("GET: Like " + str(name) + " " + str(lid))
     nes.index(index=config["butler_index"], doc_type="likes",body={"name":name,"time":datetime.now().isoformat(),"id":lid})
     try:
-        nes.delete(index=config["butler_index"], doc_type="unlikes",id=lid)
+        nes.delete_by_query(index=config["butler_index"], doc_type="unlikes",body={"query":{"bool":{"must":[{"term":{"name":name}},{"term":{"id":lid}}]}}})
     except NotFoundError:
         pass
     return resp
@@ -1023,38 +1066,43 @@ def process_dark_page(in_data):
     return (data, text, url, entities, tokens)
 
 def dark_search(url,auth_user,auth_pass,text,likes,unlikes,name,num_pages,language,bad_urls):
-    app.logger.info("Searching dark web for: " + text)
-    text = text.strip()
-    QUERY = 'text:"'+text+'"'
+    try:
+        app.logger.info("Searching dark web for: " + text)
+        text = text.strip()
+        QUERY = 'text:"'+text+'"'
 
-    dark_es = Elasticsearch(
-        [url],
-        http_auth=(auth_user, auth_pass),
-        port=443,
-        use_ssl=True,
-        verify_certs=False
-    )
+        dark_es = Elasticsearch(
+            [url],
+            http_auth=(auth_user, auth_pass),
+            port=443,
+            use_ssl=True,
+            verify_certs=False
+        )
 
-    res = dark_es.search(index="onions", q=QUERY,size=num_pages*10)
-    size = res['hits']['total']
-    app.logger.info(str(size) + " dark web search results found in index.")
-    results = [{"url":x["_source"].get("url","http://" + x["_source"].get("domain")),"title":x["_source"]["title"],"text":x["_source"]["text"]} for x in res['hits']['hits'] if "url" in x["_source"] or "domain" in x["_source"]]
-    for url in results:
-        page = getByURL(url["url"],"pages",name)
-        tokens = []
-        if page:
-            data = getByURL(url["url"],"texts",name)
-            if data:
-                tokens = data.get("tokens",[])
-        url["page"] = page
-        url["tokens"] = tokens
-    trans_results = map(lambda x:({"url":x["url"],"q":text,"title":x["title"],"text":x["text"]}, (x["page"],x["text"],x["tokens"]), name, likes, unlikes, bad_urls, language), results)
+        res = dark_es.search(index="onions", q=QUERY,size=num_pages*10)
+        size = res['hits']['total']
+        app.logger.info(str(size) + " dark web search results found in index.")
+        results = [{"url":x["_source"].get("url","http://" + x["_source"].get("domain")),"title":x["_source"]["title"],"text":x["_source"]["text"]} for x in res['hits']['hits'] if "url" in x["_source"] or "domain" in x["_source"]]
+        for url in results:
+            page = getByURL(url["url"],"pages",name)
+            tokens = []
+            if page:
+                data = getByURL(url["url"],"texts",name)
+                if data:
+                    tokens = data.get("tokens",[])
+            url["page"] = page
+            url["tokens"] = tokens
+        trans_results = map(lambda x:({"url":x["url"],"q":text,"title":x["title"],"text":x["text"]}, (x["page"],x["text"],x["tokens"]), name, likes, unlikes, bad_urls, language), results)
 
-    pool = Pool(processes=config["page_threads"])
-    results = pool.map(process_dark_page,trans_results)
-    pool.close()
-    app.logger.info(str(len(results)) + " dark web search results returned from processing.")
-    return results
+        pool = Pool(processes=config["page_threads"])
+        results = pool.map(process_dark_page,trans_results)
+        #results = [process_dark_page(x) for x in trans_results]
+        pool.close()
+        app.logger.info(str(len(results)) + " dark web search results returned from processing.")
+        return results
+    except:
+        app.logger.error("Dark Web Search Failing")
+        return []
 
 def getQueries(name,add_sub):
     query = {
@@ -1315,7 +1363,7 @@ def process_single_page(in_data):
     return (data, text, url, entities, tokens)
 
 def get_likes_to_search(last_results,likes):
-    terms = []
+    terms = set()
     data_things = [
         "names",
         "emails",
@@ -1331,16 +1379,17 @@ def get_likes_to_search(last_results,likes):
         for page in data["pages"]:
             for entity in page["entities"]:
                 if entity["id"] in likes:
-                    terms.append(entity["value"])
+                    terms.add(("entity",json.dumps(entity)))
 
         for thing in data_things:
             for p in data["profile"][thing]:
                 if p["id"] in likes:
                     if thing != "social_media":
-                        terms.append(p["value"])
+                        print json.dumps(p)
+                        terms.add((thing,json.dumps(p)))
                     else:
                         if p["username"]:
-                            terms.append(p["username"])
+                            terms.add((thing,json.dumps(p)))
 
     return terms
 
@@ -1474,7 +1523,7 @@ def new_process(q,name):
 
     app.logger.info(name + " %d urls after filtering" % len(results))
 
-    if not results:
+    if len(results) <=1:
         return None
 
     # Get texts, urls, and entry objects
@@ -1498,7 +1547,7 @@ def new_process(q,name):
     populateEntries(entries,tree_stuff)
     app.logger.info(name + " Building Profile")
 
-    profile = build_profile(entries,likes,unlikes)
+    profile = build_profile(entries,likes,unlikes,likes_to_search)
 
     app.logger.info(name + " Profile Built")
 
