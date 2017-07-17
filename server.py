@@ -1355,14 +1355,19 @@ def process_single_page(in_data):
             try:
                 nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
             except:
+                app.logger.info("ES Indexing Issue -> " + url)
                 return ()
             return ()
 
     app.logger.info("Trying to index:" + url)
-    nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
-    "language":lang,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
-    app.logger.info("Indexed! " + url)
-    app.logger.info("Returning back correctly!!" + url)
+    try:
+        nes.index(index=config["butler_index"], doc_type="texts",body={"name":name,"query":query,"time":datetime.now().isoformat(),
+        "language":lang,"url":url,"text":all_text,"main_text":text,"title":title,"tokens":tokens})
+        app.logger.info("Indexed! " + url)
+        app.logger.info("Returning back correctly!!" + url)
+    except:
+        app.logger.info("ES Indexing Issue -> " + url)
+        return ()
     return (data, text, url, entities, tokens)
 
 def get_likes_to_search(last_results,likes):
