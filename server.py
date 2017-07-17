@@ -1352,7 +1352,10 @@ def process_single_page(in_data):
             data = mark_data(data,likes,unlikes)
         except:
             app.logger.warn("Error occurred during processing.  Adding bad URL -> " + url)
-            nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
+            try:
+                nes.index(index=config["butler_index"], doc_type="bad_urls",body={"name":name,"query":query,"url":url})
+            except:
+                return ()
             return ()
 
     app.logger.info("Trying to index:" + url)
