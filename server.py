@@ -33,7 +33,7 @@ import string
 import custom_extractors
 import langdetect
 import pandas as pd
-from sri_service import star_search
+from sri_service2 import star_search
 from collections import Counter
 import cdr_search
 
@@ -194,7 +194,7 @@ def doLDA(docu,level,last_count,top_text):
     dictionary = corpora.Dictionary(texts)
     corpus = [dictionary.doc2bow(text) for text in texts]
     #tfidf = TfidfModel(corpus)
-    hdp = HdpModel(corpus,dictionary,random_state=7)
+    hdp = HdpModel(corpus,dictionary,random_state=7,K=5, T=15)
     lda = hdp.suggested_lda_model()
 
     topic_answers_dict = {"count":len(docu),"summary":None,"title":top_text,"url":None,"level":level,"children":[],"node_id":last_count,"type":"cluster"}
@@ -529,7 +529,7 @@ def add_things(data,phone_dict,address_dict,names_dict,email_dict,social_dict,ot
             data_dict = field[1]
             is_other = field[2]
 
-            for de in dd[data_name]:
+            for de in dd.get(data_name,[]):
                 if is_other:
                     data_dict[de["id"]] = data_dict.get(de["id"],[de["value"],0,set(),data_name])
                     data_dict[de["id"]][1] += 1
@@ -578,12 +578,13 @@ def build_profile(entries,likes,unlikes,likes_to_search):
             for one in e1:
                 ones_to_check.append(one)
         app.logger.info(ones_to_check)
-        emails = map(lambda x: {"Email":x["value"],"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, ones_to_check)
+        email_string = ":::".join(map(lambda x: x["value"], ones_to_check))
+        email_data = {"Email":email_string,"RegistrationKey": config["reg_key"], "Action": "analyze-v2"}
         app.logger.info("STAR SEARCH: ")
-        app.logger.info(emails)
+        app.logger.info(email_string)
         ds_results = []
-        if emails:
-            ds_results = pool.map(star_search,emails)
+        if ones_to_check:
+            ds_results = pool.map(star_search,[email_data])
             pool.close()
         app.logger.info("STAR SEARCH RESULTS:")
         app.logger.info(ds_results)
@@ -598,12 +599,13 @@ def build_profile(entries,likes,unlikes,likes_to_search):
             for one in e1:
                 ones_to_check.append(one)
         app.logger.info(ones_to_check)
-        pgs = map(lambda x: {"Phone":x["value"],"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, ones_to_check)
+        phone_string = ":::".join(map(lambda x: x["value"], ones_to_check))
+        phone_data = {"Phone":phone_string,"RegistrationKey": config["reg_key"], "Action": "analyze"}
         app.logger.info("STAR SEARCH: ")
-        app.logger.info(pgs)
+        app.logger.info(phone_string)
         ds_results = []
-        if pgs:
-            ds_results = pool.map(star_search,pgs)
+        if ones_to_check:
+            ds_results = pool.map(star_search,[phone_data])
             pool.close()
         app.logger.info("STAR SEARCH RESULTS:")
         app.logger.info(ds_results)
@@ -618,12 +620,13 @@ def build_profile(entries,likes,unlikes,likes_to_search):
             for one in e1:
                 ones_to_check.append(one)
         app.logger.info(ones_to_check)
-        emails = map(lambda x: {"PGP_EMAIL":x["value"],"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, ones_to_check)
+        email_string = ":::".join(map(lambda x: x["value"], ones_to_check))
+        email_data = {"PGP_EMAIL":email_string,"RegistrationKey": config["reg_key"], "Action": "analyze-v2"}
         app.logger.info("STAR SEARCH: ")
-        app.logger.info(emails)
+        app.logger.info(email_string)
         ds_results = []
-        if emails:
-            ds_results = pool.map(star_search,emails)
+        if ones_to_check:
+            ds_results = pool.map(star_search,[email_data])
             pool.close()
         app.logger.info("STAR SEARCH RESULTS:")
         app.logger.info(ds_results)
@@ -644,12 +647,13 @@ def build_profile(entries,likes,unlikes,likes_to_search):
             gos.append(ez[0])
 
         app.logger.info(gos)
-        emails = map(lambda x: {"PersonName":x,"RegistrationKey": "MyDogAteMyKey", "Action": "analyze"}, gos)
+        email_string = ":::".join(map(lambda x: x, gos))
+        email_data = {"PersonName":email_string,"RegistrationKey": config["reg_key"], "Action": "analyze-v2"}
         app.logger.info("STAR SEARCH: ")
-        app.logger.info(emails)
+        app.logger.info(email_data)
         ds_results = []
-        if emails:
-            ds_results = pool.map(star_search,emails)
+        if gos:
+            ds_results = pool.map(star_search,[email_data])
             pool.close()
         app.logger.info("STAR SEARCH RESULTS:")
         app.logger.info(ds_results)
@@ -1419,7 +1423,7 @@ def new_process(q,name):
     """
         Start of main process
     """
-
+    q = [q[-1]]
     app.logger.info("*** new_process *** => " + name)
     app.logger.info(json.dumps(q,indent=2))
     # Get likes and unlikes
